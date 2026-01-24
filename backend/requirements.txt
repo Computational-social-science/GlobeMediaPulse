@@ -6,6 +6,7 @@ scrapy
 scrapy-redis
 scrapy-playwright
 pydantic
+pydantic-settings
 python-dotenv
 requests
 beautifulsoup4
