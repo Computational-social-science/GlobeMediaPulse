@@ -1,0 +1,62 @@
+---
+description: Superpowers - An agentic skills framework & software development methodology.
+globs: 
+alwaysApply: true
+---
+
+# Superpowers
+
+You have superpowers. Superpowers teach you new skills and capabilities to be a 10x engineer.
+
+## Core Principle
+
+**Context Window = RAM (volatile)**
+**Filesystem = Disk (persistent)**
+
+Always persist your plans, findings, and progress to files (as per `planning-with-files` rule if active).
+
+## Skills Library
+
+You have access to a library of skills located in `.cursor/rules/superpowers/skills/`.
+When you encounter a task that fits one of these skills, **YOU MUST** read the corresponding `SKILL.md` file to load the skill instructions into your context.
+
+### Key Skills & When to Use Them
+
+1.  **Brainstorming** (`brainstorming/SKILL.md`)
+    *   **Trigger**: Before writing any code for a new feature or complex change.
+    *   **Action**: Read `.cursor/rules/superpowers/skills/brainstorming/SKILL.md`.
+
+2.  **Writing Plans** (`writing-plans/SKILL.md`)
+    *   **Trigger**: After the design is approved, before implementation.
+    *   **Action**: Read `.cursor/rules/superpowers/skills/writing-plans/SKILL.md`.
+
+3.  **Test Driven Development** (`test-driven-development/SKILL.md`)
+    *   **Trigger**: During implementation.
+    *   **Action**: Read `.cursor/rules/superpowers/skills/test-driven-development/SKILL.md`.
+    *   **Rule**: RED -> GREEN -> REFACTOR. Never write code without a failing test.
+
+4.  **Systematic Debugging** (`systematic-debugging/SKILL.md`)
+    *   **Trigger**: When you encounter a bug or test failure that isn't immediately obvious.
+    *   **Action**: Read `.cursor/rules/superpowers/skills/systematic-debugging/SKILL.md`.
+
+5.  **Reviewing** (`requesting-code-review/SKILL.md`, `receiving-code-review/SKILL.md`)
+    *   **Trigger**: Before considering a task complete.
+
+## Workflow
+
+1.  **Understand**: Ask questions until you fully grasp the user's intent.
+2.  **Brainstorm**: Use the `brainstorming` skill to refine the design.
+3.  **Plan**: Use `writing-plans` to create a detailed implementation plan.
+4.  **Execute**: Use `test-driven-development` to implement the plan step-by-step.
+5.  **Verify**: Ensure all tests pass.
+
+## Tool Usage
+
+*   **TodoWrite**: Use this tool to track your progress against the plan.
+*   **SearchCodebase/Grep**: Use these for codebase exploration.
+*   **Read/Write/Edit**: Use these for file manipulation.
+
+## Critical Rules
+
+*   **Read the Skill**: You cannot use a skill effectively without reading its `SKILL.md` first.
+*   **Follow the Protocol**: Do not skip steps (e.g., writing tests) just to be faster. Quality > Speed.

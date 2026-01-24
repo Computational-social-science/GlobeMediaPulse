@@ -1,0 +1,25 @@
+# Ignore git
+.git
+.gitignore
+
+# Ignore frontend
+frontend/
+node_modules/
+
+# Ignore virtual envs
+venv/
+env/
+.env
+
+# Ignore docker cache
+.docker/
+
+# Ignore compiled python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/

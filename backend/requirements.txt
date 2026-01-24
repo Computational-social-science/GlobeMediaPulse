@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+redis
+psycopg2-binary
+scrapy
+scrapy-redis
+scrapy-playwright
+pydantic
+python-dotenv
+requests
+beautifulsoup4
+pytest
+httpx
+jinja2
+python-multipart
+websockets
