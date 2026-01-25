@@ -1,15 +1,23 @@
-
 import asyncio
 from typing import List, Dict, Any
 from fastapi import WebSocket
 
 # Global shared state
+# Research Motivation:
+# - news_queue: Implements a Producer-Consumer pattern. Crawlers push metadata here,
+#   and the WebSocket manager consumes it to broadcast to frontend clients.
 news_queue = asyncio.Queue()
+
+# country_geo_map: In-memory cache for GeoJSON data to optimize map rendering latency.
 country_geo_map: Dict[str, Any] = {}
 
 class ConnectionManager:
     """
-    Manages WebSocket connections for real-time updates.
+    Manages WebSocket connections for real-time data dissemination.
+    
+    Research Motivation:
+        - Enables push-based updates to the frontend, eliminating the need for client-side polling.
+        - Supports low-latency visualization of crawling events (e.g., "News Flash" map effects).
     """
     def __init__(self):
         """Initialize the connection manager."""
@@ -46,9 +54,8 @@ class ConnectionManager:
             try:
                 await connection.send_json(message)
             except Exception:
-                # If sending fails, assume disconnected and remove? 
-                # Or let disconnect handle it. 
-                # Ideally we should handle cleanup.
+                # If sending fails, we assume the connection is dead.
+                # In a more robust implementation, we might schedule it for removal.
                 pass
 
 ws_manager = ConnectionManager()

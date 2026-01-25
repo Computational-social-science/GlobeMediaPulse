@@ -3,7 +3,10 @@ import requests
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+# External source for authoritative world country polygons
 GEOJSON_URL = "https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json"
+
+# Path configuration for local caching
 BASE_DIR = Path(__file__).parent
 CACHE_DIR = BASE_DIR / "data"
 CACHE_PATH = CACHE_DIR / "countries.geo.json"
@@ -13,9 +16,11 @@ def load_geojson() -> Optional[Dict[str, Any]]:
     """
     Load the world countries GeoJSON data.
     
-    Tries to load from a local cache first. If the cache does not exist,
-    it downloads the data from the remote URL and saves it to the cache.
-
+    Research Motivation:
+        - **Latency Optimization**: Checks local cache first to avoid network overhead.
+        - **Reliability**: Falls back to downloading if cache is missing.
+        - **Data Integrity**: Used for standardizing country names and visualization coordinates.
+    
     Returns:
         Optional[Dict[str, Any]]: The GeoJSON data dictionary, or None if loading fails.
     """
@@ -29,6 +34,7 @@ def load_geojson() -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     
+    # Atomic write pattern not strictly enforced here but directory creation is ensured
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     with open(CACHE_PATH, "w", encoding="utf-8") as f:
         json.dump(geojson, f, ensure_ascii=False)
@@ -38,8 +44,10 @@ def load_geojson() -> Optional[Dict[str, Any]]:
 def get_authoritative_name_map() -> Dict[str, str]:
     """
     Create a mapping from country codes to authoritative country names.
-
-    Uses the loaded GeoJSON data to build the map.
+    
+    Research Motivation:
+        - **Normalization**: Standardizes country names across different data sources (GDELT, Media Metadata).
+        - **Visualization**: Ensures consistent labeling in the frontend map interface.
 
     Returns:
         Dict[str, str]: A dictionary mapping country codes (e.g., "USA") to names (e.g., "United States of America").

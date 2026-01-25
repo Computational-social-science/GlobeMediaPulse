@@ -1,46 +1,106 @@
-# Globe Media Pulse: Global Spelling Error Fingerprints in English News (2016–Present)
-**Globe Media Pulse: 基于全球英文新闻的人类拼写错误行为指纹研究**
+# Globe Media Pulse: A Computational Observatory for the Global Media Ecosystem
 
-Target Journal: *Nature Human Behaviour*
+**Target Journal**: *Nature Human Behaviour*  
+**Status**: Active Development (v2.0 - "Snowball Discovery" Phase)
 
-## Deployment Status
-- **Backend (Fly.io)**: [https://globe-media-pulse.fly.dev](https://globe-media-pulse.fly.dev)
-- **Frontend (GitHub Pages)**: [https://computational-social-science.github.io/globe-media-pulse/](https://computational-social-science.github.io/globe-media-pulse/)
+## 1. Scientific Motivation
 
-## Overview
-This project investigates spelling errors in global English news (2016–Present) as emergent behavioural traces of national news production systems. By analyzing the statistical structure of spelling errors across 195+ countries, we aim to identify stable, comparable, and evolving "fingerprints" of human behaviour.
+In the digital information age, the structure of the global media landscape is not static but fluid and hierarchical. Traditional media monitoring relies on static, manually curated lists (seed libraries) which suffer from:
+1.  **Selection Bias**: Over-representation of "Global North" outlets.
+2.  **Decay**: Inability to track the rapid emergence of digital-native local sources (Tier-2).
+3.  **Opaqueness**: Lack of transparency in how "influence" is defined.
 
-## Architecture
-The project follows a Monorepo structure:
+**Globe Media Pulse** proposes a dynamic, algorithmic approach to mapping the global information ecosystem. By treating media outlets as nodes in a citation network, we employ **Snowball Sampling** initiated from high-authority "Super Nodes" (Tier-0) to automatically discover, classify, and monitor the long tail of local media (Tier-2).
 
-- **`/backend`**: Python 3.11+ research engine (FastAPI, spaCy, rapidfuzz, scikit-learn). Handles data crawling, error detection, vectorization, and statistical analysis.
-- **`/frontend`**: Svelte + Vite + TypeScript interactive visualization. Provides exploratory data analysis (EDA) tools, global maps, and fingerprint radar charts.
+This system serves as a foundational instrument for Computational Social Science, enabling real-time observation of information propagation, framing competitions, and the structural topology of global news.
 
-## Setup
+---
+
+## 2. Methodology & Algorithms
+
+### 2.1 Tiered Media Stratification Strategy
+We model the media ecosystem as a three-tier hierarchy based on influence scope and citation authority:
+*   **Tier-0 (Global Super-Nodes)**: Transnational wire services and elite media (e.g., Reuters, AP, AFP). These serve as the "Ground Truth" seeds.
+*   **Tier-1 (National Hubs)**: Dominant national broadcasters and newspapers (e.g., CCTV, BBC, Le Monde).
+*   **Tier-2 (Local/Regional Nodes)**: The vast, dynamic layer of local reporting and specialized outlets.
+
+### 2.2 Algorithmic Discovery (Snowball Sampling)
+Instead of manual curation, we implement an automated discovery pipeline:
+1.  **Ingestion**: Deep crawling of Tier-0/1 articles.
+2.  **Extraction**: Parsing of citation outlinks from article bodies (not just navigation menus).
+3.  **Voting Mechanism**: Unseen domains cited by multiple authoritative nodes accumulate "Citation Credits".
+4.  **Promotion**: Candidates crossing a significance threshold are automatically promoted to the monitoring pool.
+
+### 2.3 Structural Fingerprinting (SimHash)
+To ensure data integrity and robust source identification:
+*   We utilize **SimHash** to generate locality-sensitive hashes of website DOM structures.
+*   This allows the system to detect:
+    *   Site layout changes (indicating redesigns or ownership changes).
+    *   Mirror sites and content farms (structural clones).
+    *   Anti-scraping countermeasures.
+
+---
+
+## 3. System Architecture
+
+The project adopts a **Hybrid Cloud/Local** architecture designed for resilience and scalability.
+
+### 3.1 Backend Core (`/backend`)
+*   **Framework**: FastAPI (Python 3.11+) for high-performance async orchestration.
+*   **Crawling Engine**: Scrapy + Scrapy-Redis + Playwright.
+    *   Distributed scheduling via Redis.
+    *   Headless browser rendering for modern SPA websites.
+*   **Intelligence Operators**: Modular units for Source Classification, Parsing, and Storage logic.
+*   **Data Hygiene**: Strict "Metadata Only" storage policy. Article bodies are processed for metadata/links and then discarded to respect privacy and copyright.
+
+### 3.2 Frontend Visualization (`/frontend`)
+*   **Framework**: Svelte + Vite + D3.js.
+*   **Real-time Interactivity**: WebSocket connections to the backend for live crawling updates.
+*   **Geospatial Analysis**: Interactive global maps rendering media density and event hotspots.
+
+### 3.3 Infrastructure
+*   **Database**: PostgreSQL (Metadata, Relational Graph).
+*   **Queue/Cache**: Redis (Upstash/Fly.io) for deduplication and task scheduling.
+*   **Deployment**:
+    *   **Cloud**: Fly.io (Backend), GitHub Pages (Frontend).
+    *   **CI/CD**: GitHub Actions for automated testing and deployment.
+
+---
+
+## 4. Quick Start (Research Environment)
 
 ### Prerequisites
-- Python 3.11+
-- Node.js 18+
+*   Python 3.11+
+*   Node.js 18+
+*   PostgreSQL & Redis
 
 ### Installation
 
-1.  **Backend**
-    ```bash
-    cd backend
-    python -m venv venv
-    source venv/bin/activate  # or venv\Scripts\activate on Windows
-    pip install -r requirements.txt
-    ```
+**1. Backend (Intelligence Engine)**
+```bash
+cd backend
+python -m venv venv
+# Windows: venv\Scripts\activate | Mac/Linux: source venv/bin/activate
+pip install -r requirements.txt
+playwright install chromium  # Install headless browser
+python main.py  # Starts API server on port 8002
+```
 
-2.  **Frontend**
-    ```bash
-    cd frontend
-    npm install
-    npm run dev
-    ```
+**2. Frontend (Visualization Console)**
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-## Research Plan
-See [News.md](News.md) for the detailed research proposal and engineering task breakdown.
+---
 
-## License
-MIT
+## 5. Deployment Status
+*   **Live Dashboard**: [https://computational-social-science.github.io/globe-media-pulse/](https://computational-social-science.github.io/globe-media-pulse/)
+*   **API Endpoint**: [https://globe-media-pulse.fly.dev](https://globe-media-pulse.fly.dev)
+
+---
+
+## 6. License
+**MIT License**
+Copyright (c) 2026 Computational Social Science Lab.

@@ -30,6 +30,11 @@ WORKDIR /app
 # Copy installed dependencies from builder
 COPY --from=builder /root/.local /root/.local
 
+# Install Playwright browsers and dependencies
+RUN apt-get update && \
+    playwright install --with-deps chromium && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy source code
 COPY backend ./backend
 

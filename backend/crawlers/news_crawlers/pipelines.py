@@ -19,9 +19,14 @@ logger = logging.getLogger(__name__)
 
 class ClassificationPipeline:
     """
-    Enriches the item with Tier info if not present.
+    Intelligence Pipeline Stage 1: Metadata Enrichment.
+    
+    Research Motivation:
+        - Enhances raw crawled items with intelligence data (Tier, Country, Domain).
+        - Ensures consistent data labeling before storage or further processing.
     """
     def process_item(self, item, spider):
+        # Skip enrichment for structural/candidate items
         if isinstance(item, (CandidateSourceItem, SourceUpdateItem)):
             return item
 
@@ -29,6 +34,7 @@ class ClassificationPipeline:
         url = adapter.get('url')
         
         if url:
+            # Query the SourceClassifier for metadata
             classification = source_classifier.classify(url)
             if not adapter.get('source_tier'):
                 adapter['source_tier'] = classification.get('tier')
@@ -39,9 +45,15 @@ class ClassificationPipeline:
 
 class PostgresStoragePipeline:
     """
-    Saves the item to PostgreSQL using the existing StorageOperator.
+    Storage Pipeline Stage 2: Database Persistence.
+    
+    Research Motivation:
+        - **Persistence Layer**: Commits validated data to PostgreSQL.
+        - **Separation of Concerns**: Decouples crawling logic from storage logic.
+        - **Candidate Management**: Handles the registration of new 'Candidate Sources' discovered via snowball sampling.
     """
     def process_item(self, item, spider):
+        # Case 1: New Candidate Source Discovered
         if isinstance(item, CandidateSourceItem):
             adapter = ItemAdapter(item)
             candidate_data = {
@@ -56,6 +68,7 @@ class PostgresStoragePipeline:
                 logger.error(f"Failed to save candidate {adapter.get('domain')}: {e}")
             return item
             
+        # Case 2: Existing Source Metadata Update
         if isinstance(item, SourceUpdateItem):
             adapter = ItemAdapter(item)
             update_data = {
@@ -70,21 +83,21 @@ class PostgresStoragePipeline:
                 logger.error(f"Failed to update media source {adapter.get('domain')}: {e}")
             return item
 
+        # Case 3: News Article Metadata (No Content Stored)
         adapter = ItemAdapter(item)
         
-        # Convert to dict format expected by storage_operator
+        # Transform to storage schema
         article_data = {
             "url": adapter.get('url'),
             "title": adapter.get('title'),
-            "content": adapter.get('content'),
+            "content": adapter.get('content'), # Content is passed but filtered by storage policy
             "published_at": adapter.get('published_at'),
-            "sourcecountry": adapter.get('country_code'), # Mapping to storage key
+            "sourcecountry": adapter.get('country_code'),
             "country_name": adapter.get('country_name'),
             "source_tier": adapter.get('source_tier'),
             "source_domain": adapter.get('source_domain'),
         }
         
-        # Save (batch size 1 for now, can be optimized)
         try:
             storage_operator.save_articles([article_data])
             logger.debug(f"Saved article: {adapter.get('url')}")

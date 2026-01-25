@@ -87,6 +87,7 @@ class CandidateSource(Base):
     found_at = Column(DateTime, server_default=func.now())
     status = Column(Text, default="pending") # pending, approved, rejected
     tier_suggestion = Column(Text, nullable=True)
+    citation_count = Column(Integer, default=1)
 
 class MediaSource(Base):
     """

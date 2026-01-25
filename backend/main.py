@@ -5,7 +5,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 import time
-from typing import Dict, Any
+from typing import Dict, Any, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -42,69 +42,83 @@ self_heal_last_run = 0.0
 async def lifespan(app: FastAPI):
     """
     Lifecycle manager for the FastAPI application.
-    Handles startup and shutdown events.
-    """
-    # Startup
-    logger.info("Starting Globe Media Pulse Backend...")
     
-    # Run Initialization Pipeline
+    Responsibilities:
+    1.  **Startup Sequence**:
+        -   Initializes the Global Initialization Pipeline (DB, Queues, etc.).
+        -   Starts the Background Health Monitor task.
+        -   Logs all registered API routes for debugging.
+    2.  **Shutdown Sequence**:
+        -   Gracefully closes Database connection pools.
+        -   Ensures clean resource release.
+    """
+    # Startup Phase
+    logger.info("Starting Globe Media Pulse Backend System...")
+    
+    # Execute Initialization Pipeline
     init_pipeline.run()
     
-    # Start Health Monitor
+    # Launch System Health Monitor (Background Daemon)
     asyncio.create_task(monitor_system_health())
 
-    # Log all routes
+    # Audit Routes
     for route in app.routes:
         methods = getattr(route, "methods", None)
-        logger.info(f"Route: {route.path} {methods}")
+        logger.info(f"Registered Route: {route.path} {methods}")
     
     yield
     
-    # Shutdown
-    logger.info("Shutting down Globe Media Pulse Backend...")
+    # Shutdown Phase
+    logger.info("Shutting down Globe Media Pulse Backend System...")
     db_manager.close()
 
 async def monitor_system_health():
     """
-    Background task: Periodically checks system health and triggers auto-heal if needed.
+    Background Daemon: System Health Monitoring & Self-Healing.
+    
+    Algorithm:
+    -   Periodically polls core services (PostgreSQL, Redis) for liveness.
+    -   Implements a 'Circuit Breaker' pattern with a failure counter.
+    -   Triggers automated recovery procedures (`_autoheal_internal`) upon exceeding `MAX_FAILURES`.
     """
     consecutive_failures = 0
     MAX_FAILURES = 3
     CHECK_INTERVAL = 30  # seconds
 
-    logger.info("Starting System Health Monitor...")
+    logger.info("System Health Monitor Daemon Started.")
     
     while True:
         try:
             await asyncio.sleep(CHECK_INTERVAL)
             
-            # Run health checks
+            # Execute Health Checks
             services = await _run_health_checks()
             is_healthy = services["postgres"] == "ok" and services["redis"] == "ok"
             
             if is_healthy:
                 if consecutive_failures > 0:
-                    logger.info(f"System recovered after {consecutive_failures} failures.")
+                    logger.info(f"System recovered stability after {consecutive_failures} consecutive failures.")
                 consecutive_failures = 0
             else:
                 consecutive_failures += 1
-                logger.warning(f"Health check failed ({consecutive_failures}/{MAX_FAILURES}). Services: {services}")
+                logger.warning(f"Health Check Failed ({consecutive_failures}/{MAX_FAILURES}). Service Status: {services}")
                 
                 if consecutive_failures >= MAX_FAILURES:
-                    logger.warning("Max failures reached. Triggering Auto-Heal...")
+                    logger.warning("Critical Failure Threshold Reached. Initiating Auto-Heal Protocol...")
                     result = await _autoheal_internal()
-                    logger.info(f"Auto-Heal Result: {result}")
+                    logger.info(f"Auto-Heal Execution Report: {result}")
                     
-                    # Reset counter after auto-heal attempt
+                    # Reset counter after attempted recovery
                     consecutive_failures = 0
                     
         except Exception as e:
-            logger.error(f"Error in Health Monitor: {e}")
-            await asyncio.sleep(5)  # Short sleep on error to avoid tight loops
+            logger.error(f"Health Monitor Exception: {e}")
+            await asyncio.sleep(5)  # Backoff to prevent tight error loops
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, title="Globe Media Pulse API")
 
-# CORS
+# CORS Configuration
+# Securely allows requests from permitted frontend origins (Local Dev & Production)
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
 origins = [
     "http://localhost:5173",
@@ -125,53 +139,66 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logger.info(f"Including API Router with {len(api_router.routes)} routes")
+logger.info(f"Mounting API Router with {len(api_router.routes)} endpoints.")
 app.include_router(api_router, prefix="/api")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """
-    WebSocket endpoint for real-time updates.
-    Connects clients to the shared WebSocket manager.
+    WebSocket Endpoint for Real-Time Event Streaming.
+    
+    Functionality:
+    -   Establishes a persistent full-duplex connection.
+    -   Registers the client with the global `ws_manager`.
+    -   Maintains a heartbeat loop until disconnection.
     """
     await ws_manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive, maybe handle client messages
-            # For now, just wait for disconnect
-            data = await websocket.receive_text()
-            # Optional: handle ping/pong or control messages
+            # Keep-alive loop; await messages (e.g., pings) or disconnection
+            await websocket.receive_text()
     except Exception:
         ws_manager.disconnect(websocket)
 
-# Helper functions for health checks (Sync wrappers)
+# --- Health Check Implementation Details ---
+
 def _check_postgres_sync():
-    """Perform a real connectivity check on Postgres."""
+    """
+    Synchronous Connectivity Check for PostgreSQL.
+    Executes a lightweight `SELECT 1` query to verify DB responsiveness.
+    """
     try:
-        # get_connection is a context manager that handles pool.getconn/putconn
         with db_manager.get_connection() as conn:
             if conn is None:
                 return False
-            # Lightweight query to ensure connection is valid
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
             return True
     except Exception as e:
-        logger.error(f"Health Check Postgres Error: {e}")
+        logger.error(f"PostgreSQL Health Check Failed: {e}")
         return False
 
 def _check_redis_sync():
-    """Perform a real connectivity check on Redis."""
+    """
+    Synchronous Connectivity Check for Redis.
+    Executes a `PING` command to verify Cache/Queue responsiveness.
+    """
     try:
         return redis_client.ping()
     except Exception as e:
-        logger.error(f"Health Check Redis Error: {e}")
+        logger.error(f"Redis Health Check Failed: {e}")
         return False
 
 @app.get("/health/full")
 async def health_full(autoheal: bool = False) -> Dict[str, Any]:
     """
-    Detailed health check for internal services (Async + Parallel).
+    Comprehensive System Health Diagnostic Endpoint.
+    
+    Args:
+        autoheal (bool): If True, triggers self-healing attempts if degradation is detected.
+        
+    Returns:
+        Dict: Detailed status of all subsystems (Postgres, Redis) and self-heal results.
     """
     status = {"status": "ok", "services": {}, "self_heal": None}
     services = await _run_health_checks()
@@ -179,10 +206,11 @@ async def health_full(autoheal: bool = False) -> Dict[str, Any]:
 
     if services["postgres"] != "ok" or services["redis"] != "ok":
         status["status"] = "degraded"
-        logger.warning(f"Health check degraded: {status}")
+        logger.warning(f"System Health Degraded: {status}")
 
     if autoheal and status["status"] != "ok":
         status["self_heal"] = await _autoheal_internal()
+        # Re-verify after healing
         services = await _run_health_checks()
         status["services"] = services
         status["status"] = "ok" if services["postgres"] == "ok" and services["redis"] == "ok" else "degraded"
@@ -191,12 +219,18 @@ async def health_full(autoheal: bool = False) -> Dict[str, Any]:
 
 @app.post("/health/autoheal")
 async def autoheal() -> Dict[str, Any]:
+    """
+    Manual Trigger for System Self-Healing Protocols.
+    """
     result = await _autoheal_internal()
     services = await _run_health_checks()
     status = "ok" if services["postgres"] == "ok" and services["redis"] == "ok" else "degraded"
     return {"status": status, "services": services, "self_heal": result}
 
 async def _run_health_checks() -> Dict[str, str]:
+    """
+    Executes all service health checks in parallel with timeouts.
+    """
     TIMEOUT = 2.0
 
     async def safe_check(check_func, name):
@@ -219,6 +253,15 @@ async def _run_health_checks() -> Dict[str, str]:
     return {"postgres": pg_status, "redis": redis_status}
 
 async def _autoheal_internal() -> Dict[str, Any]:
+    """
+    Internal Logic for System Self-Healing.
+    
+    Strategy:
+    -   **Concurrency Control**: Uses a Lock to prevent overlapping heal operations.
+    -   **Cooldown**: Enforces a minimum interval between heal attempts to prevent thrashing.
+    -   **Postgres Recovery**: Re-initializes the DB connection pool.
+    -   **Redis Recovery**: Re-establishes the Redis client connection.
+    """
     global redis_client, self_heal_last_run
     if self_heal_lock.locked():
         return {"state": "busy"}
@@ -266,10 +309,10 @@ async def _autoheal_internal() -> Dict[str, Any]:
 @app.get("/")
 def read_root() -> Dict[str, str]:
     """
-    Root endpoint.
+    Root Endpoint.
     
     Returns:
-        dict: Basic system status.
+        dict: Basic system identity and status.
     """
     return {
         "status": "online",

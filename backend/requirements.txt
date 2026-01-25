@@ -5,14 +5,13 @@ psycopg2-binary
 sqlalchemy
 scrapy
 scrapy-redis
+trafilatura
 scrapy-playwright
 pydantic
 pydantic-settings
 python-dotenv
 requests
-beautifulsoup4
 pytest
-httpx
 jinja2
 python-multipart
 websockets

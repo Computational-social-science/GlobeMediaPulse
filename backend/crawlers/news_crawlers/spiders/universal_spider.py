@@ -8,37 +8,57 @@ from urllib.parse import urlparse
 from backend.utils.simhash import compute_structural_simhash
 
 class UniversalNewsSpider(scrapy.Spider):
+    """
+    Core Scrapy Spider for Global Media Monitoring.
+    
+    Research Motivation:
+        - **Universal Crawling**: Designed to ingest content from any news website without custom parsers,
+          leveraging `trafilatura` for generic content extraction.
+        - **Snowball Sampling**: Implements a network-based discovery algorithm. By crawling 'Tier-0' (Global)
+          and 'Tier-1' (National) sources, it automatically identifies 'Tier-2' (Local) sources via citation analysis.
+        - **Structural Fingerprinting**: Computes SimHash of the DOM structure to detect layout changes
+          and potentially classify source types (e.g., distinguishing blogs from news portals).
+    """
     name = "universal_news"
     
     def __init__(self, *args, **kwargs):
         super(UniversalNewsSpider, self).__init__(*args, **kwargs)
-        # Load seeds from the centralized library
+        # Load seeds from the centralized library (Source of Truth)
         self.seeds = source_classifier.sources
         self.start_urls = []
         
-        # Initialize start URLs from seeds (Tier-0/1)
+        # Initialize start URLs from verified Tier-0/1 seeds
         for domain, source in self.seeds.items():
-            # Basic heuristic to construct URL
+            # Heuristic: Assume HTTPS for modern media sites
             url = f"https://{domain}"
             self.start_urls.append(url)
             
     def start_requests(self):
+        """
+        Generate initial requests for all seed URLs.
+        Uses Playwright for JavaScript rendering to ensure full DOM access.
+        """
         for url in self.start_urls:
             yield scrapy.Request(url, callback=self.parse_homepage, meta={"playwright": True})
 
     def parse_homepage(self, response):
         """
-        Parse homepage to find article links and potential new sources.
-        Also computes structural fingerprint (SimHash) and extracts Logo.
+        Parse homepage to discover article links and new candidate sources.
+        
+        Methodology:
+            1. **Metadata Extraction**: Compute structural SimHash and extract visual identity (Logo).
+            2. **Link Analysis**:
+               - **Internal Links**: Analyzed as potential articles based on URL path depth.
+               - **External Links**: Analyzed as potential 'Candidate Sources' for the snowball sampling algorithm.
         """
         # 0. Extract Source Metadata (SimHash & Logo)
         current_domain = source_classifier.classify(response.url)['source_domain']
         
-        # SimHash
+        # Compute Structural SimHash (Research: DOM-based classification)
         html_content = response.text
         simhash = compute_structural_simhash(html_content)
         
-        # Logo (Heuristic)
+        # Extract Logo URL (Heuristic: Standard HTML meta tags)
         logo_url = response.css('link[rel="icon"]::attr(href)').get() or \
                    response.css('link[rel="shortcut icon"]::attr(href)').get() or \
                    response.css('meta[property="og:image"]::attr(content)').get()
@@ -46,14 +66,14 @@ class UniversalNewsSpider(scrapy.Spider):
         if logo_url:
             logo_url = response.urljoin(logo_url)
             
-        # Yield Update Item
+        # Yield Source Update Item (for metadata persistence)
         update_item = SourceUpdateItem()
         update_item['domain'] = current_domain
         update_item['logo_url'] = logo_url
         update_item['structure_simhash'] = simhash
         yield update_item
 
-        # Extract all links
+        # Extract all hyperlinks for traversal
         links = response.css('a::attr(href)').getall()
         
         for link in links:
@@ -66,38 +86,78 @@ class UniversalNewsSpider(scrapy.Spider):
 
             link_domain = parsed_url.netloc.replace('www.', '')
             
-            # 1. Check if it's an internal link (Article Candidate)
+            # 1. Internal Link Processing (Article Discovery)
             if link_domain == current_domain:
-                 # Path length heuristic for articles
+                 # Heuristic: Articles usually have deeper path structures than section headers
                  if len(parsed_url.path) > 10:
                      yield scrapy.Request(url, callback=self.parse_article)
             
-            # 2. Check if it's an external link (Source Candidate)
+            # 2. External Link Processing (Snowball Discovery)
             else:
-                # Check if this domain is already known
+                # Check if this domain is a known seed
                 if link_domain not in self.seeds:
-                    # Yield as candidate source
+                    # Yield as candidate source for Tier-2 evaluation
                     item = CandidateSourceItem()
                     item['domain'] = link_domain
                     item['found_on'] = response.url
-                    item['tier_suggestion'] = 'Tier-2' # Assumption: Tier-0 links to Tier-1/2
+                    item['tier_suggestion'] = 'Tier-2' # Hypothesis: Tier-0/1 sources cite Tier-2 sources
                     yield item
 
     def parse_article(self, response):
         """
-        Extract content using Trafilatura.
+        Extract article content and perform deep citation analysis.
+        
+        Methodology:
+            1. **Content Extraction**: Uses `trafilatura` for high-precision text extraction.
+            2. **Snowball Sampling (Deep)**: Scans the article body for outlinks.
+               - Assumption: Links embedded in article text (citations) are stronger quality signals
+                 than sidebar/footer links.
         """
+        # 1. Content Extraction
         downloaded = response.body
+        # include_comments=False: Focus on journalistic content
         result = trafilatura.extract(downloaded, include_comments=False, include_tables=False, no_fallback=True)
         
         if result:
             item = NewsArticleItem()
             item['url'] = response.url
             item['title'] = response.css('title::text').get()
-            item['content'] = result
-            item['scraped_at'] = None # Will be set by DB default or pipeline
-            
-            # Metadata extraction from Trafilatura (if using bare_extraction) or Scrapy
-            # Here we keep it simple
-            
+            item['content'] = result # Policy: Content passed to pipeline but NOT stored permanently
+            item['scraped_at'] = None 
             yield item
+
+            # 2. Snowball Sampling: Extract Outlinks from Article Body
+            # Heuristic: Links inside paragraphs (p > a) are high-probability citations
+            outlinks = response.css('p a::attr(href)').getall()
+            
+            # Filter Noise: Common social media and tech platforms
+            IGNORED_DOMAINS = {'facebook.com', 'twitter.com', 'instagram.com', 'linkedin.com', 'youtube.com', 'google.com', 't.co', 'bit.ly', 'apple.com', 'amazon.com', 'microsoft.com'}
+            
+            # Normalize current domain
+            parsed_current = urlparse(response.url)
+            current_domain = parsed_current.netloc.replace('www.', '').lower()
+
+            for link in outlinks:
+                url = response.urljoin(link)
+                parsed = urlparse(url)
+                
+                if not parsed.netloc:
+                    continue
+                    
+                link_domain = parsed.netloc.replace('www.', '').lower()
+                
+                # Filtering Logic:
+                # 1. External links only
+                # 2. Exclude ignored platforms
+                # 3. Exclude known seeds (already monitored)
+                
+                if (link_domain != current_domain and 
+                    link_domain not in IGNORED_DOMAINS and 
+                    link_domain not in self.seeds):
+                    
+                    # Yield Candidate Source for network expansion
+                    cand_item = CandidateSourceItem()
+                    cand_item['domain'] = link_domain
+                    cand_item['found_on'] = response.url
+                    cand_item['tier_suggestion'] = 'Tier-2'
+                    yield cand_item

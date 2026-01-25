@@ -1,4 +1,3 @@
-
 import os
 import time
 import logging
@@ -18,12 +17,24 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     """
     Singleton Database Manager for PostgreSQL connection pooling.
-    Handles initialization, connection acquisition, and graceful shutdown.
+    
+    Research Motivation:
+        High-throughput crawling requires efficient database connection management.
+        Creating a new connection for every request is computationally expensive (TCP handshake, authentication).
+        This class implements a Singleton pattern to manage a `ThreadedConnectionPool`, ensuring
+        O(1) access to active connections and minimizing overhead.
+    
+    Architectural Role:
+        - Acts as the central gateway for all synchronous database interactions.
+        - Integrates with a Circuit Breaker pattern to prevent cascading failures during database outages.
     """
     _instance = None
     _pool = None
 
     def __new__(cls):
+        """
+        Enforce Singleton pattern to ensure only one connection pool exists per process.
+        """
         if cls._instance is None:
             cls._instance = super(DatabaseManager, cls).__new__(cls)
         return cls._instance
@@ -31,8 +42,10 @@ class DatabaseManager:
     def initialize(self):
         """
         Initialize the global connection pool if not already initialized.
-        Uses ThreadedConnectionPool for thread safety.
-        Retries connection up to 3 times on failure.
+        
+        Implementation Details:
+            - Uses `psycopg2.pool.ThreadedConnectionPool` for thread-safe access in concurrent environments.
+            - Implements a retry mechanism with exponential backoff (implied) to handle transient startup failures.
         """
         if self._pool:
             return
@@ -42,11 +55,14 @@ class DatabaseManager:
             return
 
         db_url = settings.DATABASE_URL
+        # Log only the host/db part for security, masking credentials
         logger.info(f"Initializing Global DB Pool for {db_url.split('@')[-1] if db_url else 'None'}")
 
         max_retries = 3
         for i in range(max_retries):
             try:
+                # minconn=1: Keep at least one connection open to reduce latency for the first request.
+                # maxconn=20: Limit concurrency to prevent overwhelming the database server.
                 self._pool = psycopg2.pool.ThreadedConnectionPool(
                     minconn=1, maxconn=20, dsn=db_url
                 )
@@ -60,13 +76,23 @@ class DatabaseManager:
                     logger.critical(f"CRITICAL: Could not connect to DB: {e}")
     
     def get_pool(self):
-        """Returns the active connection pool, initializing it if necessary."""
+        """
+        Retrieve the active connection pool, initializing it lazily if necessary.
+        
+        Returns:
+            psycopg2.pool.ThreadedConnectionPool: The active connection pool.
+        """
         if not self._pool:
             self.initialize()
         return self._pool
 
     def close(self):
-        """Closes all connections in the pool."""
+        """
+        Gracefully close all connections in the pool.
+        
+        Usage:
+            Should be called during application shutdown to release database resources.
+        """
         if self._pool:
             self._pool.closeall()
             self._pool = None
@@ -76,12 +102,17 @@ class DatabaseManager:
     def get_connection(self):
         """
         Context manager to acquire a connection from the pool.
-        Integrates with Circuit Breaker to fail fast during outages.
+        
+        Research Motivation:
+            - **Resource Management**: Ensures connections are always returned to the pool (putconn)
+              even if exceptions occur, preventing connection leaks.
+            - **Resilience**: Integrates with `postgres_breaker` (Circuit Breaker) to fail fast
+              when the database is unhealthy, preserving system resources.
         
         Yields:
             psycopg2.extensions.connection: A database connection object, or None if unavailable.
         """
-        # Circuit Breaker Check
+        # Circuit Breaker Check: Fail fast if the database is known to be down.
         if not postgres_breaker.allow_request():
             yield None
             return
@@ -95,6 +126,7 @@ class DatabaseManager:
         try:
             conn = pool.getconn()
         except Exception as e:
+            # Record failure in circuit breaker to trip if error rate exceeds threshold.
             postgres_breaker.record_failure()
             logger.error(f"Error getting connection from pool: {e}")
             yield None

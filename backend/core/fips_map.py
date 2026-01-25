@@ -1,12 +1,13 @@
 """
 Mapping between FIPS 10-4 country codes and ISO 3166-1 Alpha-3 codes.
-GDELT relies on FIPS 10-4, while modern systems (and Globe Media Pulse) prefer ISO 3166-1.
+
+Research Motivation:
+    - **Data Integration**: GDELT (Global Data on Events, Language, and Tone) relies on the older FIPS 10-4 standard.
+    - **Modernization**: Modern systems (including Globe Media Pulse and standard GeoJSON libraries) utilize ISO 3166-1 Alpha-3.
+    - **Interoperability**: This mapping table serves as the Rosetta Stone for joining GDELT event data with our standardized media source library.
 """
 
 # FIPS 10-4 to ISO 3166-1 Alpha-3 Mapping
-# GDELT uses FIPS 10-4 country codes.
-# Globe Media Pulse uses ISO 3166-1 Alpha-3.
-
 FIPS_TO_ISO3 = {
     "AF": "AFG", # Afghanistan
     "AL": "ALB", # Albania
