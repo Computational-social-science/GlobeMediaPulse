@@ -9,8 +9,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../.
 
 BOT_NAME = "GlobeMediaPulse"
 
-SPIDER_MODULES = ["news_crawlers.spiders"]
-NEWSPIDER_MODULE = "news_crawlers.spiders"
+SPIDER_MODULES = ["backend.crawlers.news_crawlers.spiders"]
+NEWSPIDER_MODULE = "backend.crawlers.news_crawlers.spiders"
 
 # Robot Protocol Compliance
 ROBOTSTXT_OBEY = True
@@ -47,8 +47,7 @@ ITEM_PIPELINES = {
    "news_crawlers.pipelines.EntityAlignmentPipeline": 360,
    "news_crawlers.pipelines.NarrativeAnalysisPipeline": 370,
    "news_crawlers.pipelines.PostgresStoragePipeline": 400,
-   # RedisPipeline can be enabled for distributed post-processing
-   # 'scrapy_redis.pipelines.RedisPipeline': 400,
+   "news_crawlers.pipelines.RedisPublishPipeline": 410,
 }
 
 # Distributed Crawling Configuration (Scrapy-Redis)

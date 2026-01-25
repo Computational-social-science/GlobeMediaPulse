@@ -3,6 +3,7 @@
   import { scale } from 'svelte/transition';
   import { quintOut } from 'svelte/easing';
   import { windowState } from '../stores.js';
+  import { soundManager } from '../audio/SoundManager.js';
 
   // Component Props
   /** @type {string} */
@@ -47,6 +48,9 @@
   function startDrag(e) {
     // @ts-ignore
     if (state.maximized) return; // Cannot drag maximized windows
+    
+    soundManager.playClick(); // Sound Effect
+    
     isDragging = true;
     // @ts-ignore
     dragOffset.x = e.clientX - state.position.x;
@@ -84,6 +88,7 @@
   }
 
   function toggleMinimize() {
+    soundManager.playHover(); // Sound Effect
     windowState.update(s => {
       /** @type {any} */
       const state = s;

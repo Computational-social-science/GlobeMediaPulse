@@ -1,25 +1,22 @@
 <script>
     import { onMount, onDestroy } from 'svelte';
-    import { gameStats, isPaused, playbackSpeed, windowState, simulationDate, serviceStatus } from './lib/stores.js';
+    import { windowState, serviceStatus, systemStatus, backendThreadStatus } from './lib/stores.js';
+    import { soundManager } from './lib/audio/SoundManager.js';
+    import { webSocketService } from './lib/services/WebSocketService.js';
     import MapContainer from './lib/components/MapContainer.svelte';
     import Header from './lib/components/Header.svelte';
     import CommandBar from './lib/components/CommandBar.svelte';
-    import NewsFeed from './lib/components/NewsFeed.svelte';
     import DraggableWindow from './lib/components/DraggableWindow.svelte';
-    import MonthlySummary from './lib/components/MonthlySummary.svelte';
-    import CountriesContent from './lib/components/CountriesContent.svelte';
-    import CorpusViewer from './lib/components/CorpusViewer.svelte';
-    import StatsContent from './lib/components/StatsContent.svelte';
-    import AnalysisWindow from './lib/components/AnalysisWindow.svelte';
-    import GameController from './lib/components/GameController.svelte';
-    import MediaAtlasContent from './lib/components/MediaAtlasContent.svelte';
+    import BrainDashboard from './lib/components/BrainDashboard.svelte';
+    import SystemMonitorWindow from './lib/components/SystemMonitorWindow.svelte';
 
     // System Health Status
     // [FROZEN] Global Health Check Linkage Logic
-    let systemStatus = 'OFFLINE'; // Default status
+    // let systemStatus = 'OFFLINE'; // Replaced by store
     /** @type {any} */
     let healthCheckTimer;
     let retryCount = 0;
+    let isLoading = true; // Initial Loading State
 
     /**
      * Periodically checks the system health via the API.
@@ -27,7 +24,8 @@
      */
     async function checkSystemHealth() {
         try {
-            const apiBase = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+            // @ts-ignore
+            const apiBase = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
             const response = await fetch(`${apiBase}/health/full`);
             if (response.ok) {
                 const data = await response.json();
@@ -36,34 +34,45 @@
                 if (data.services) {
                     serviceStatus.set(data.services);
                 }
+                
+                // Update Backend Thread Status
+                if (data.threads) {
+                    backendThreadStatus.set(data.threads);
+                }
 
                 if (data.status === 'ok') {
-                    systemStatus = 'ONLINE';
+                    systemStatus.set('ONLINE');
                     retryCount = 0; // Reset retry counter on success
                 } else if (data.status === 'degraded') {
                     // [UPDATED] Handling degraded status as per user request
                     // Show yellow warning but do NOT block UI interactions
-                    systemStatus = 'DEGRADED';
+                    systemStatus.set('DEGRADED');
                     retryCount = 0;
                 } else {
-                    systemStatus = 'OFFLINE';
+                    systemStatus.set('OFFLINE');
                     // If backend returns explicitly OFFLINE (rare for health endpoint), treat as failure for backoff
                     retryCount++;
                 }
             } else {
-                systemStatus = 'OFFLINE';
+                systemStatus.set('OFFLINE');
                 retryCount++;
             }
         } catch (error) {
             console.warn('Health check failed:', error);
-            systemStatus = 'OFFLINE';
+            systemStatus.set('OFFLINE');
             retryCount++;
+        } finally {
+            // Disable loading screen after first check attempt (success or fail)
+            // Delay slightly for smooth transition
+            setTimeout(() => {
+                isLoading = false;
+            }, 500);
         }
 
         // Schedule next check with Exponential Backoff (Thundering Herd Protection)
-        let nextDelay = 15000; // Normal interval: 15s (optimized for performance)
+        let nextDelay = 30000; // Normal interval: 30s (optimized for performance)
         
-        if (systemStatus === 'OFFLINE') {
+        if ($systemStatus === 'OFFLINE') {
             // Backoff Strategy: 5s -> 10s -> 20s -> 40s -> 60s
             const base = 5000;
             const cap = 60000;
@@ -90,6 +99,9 @@
      * @param {MouseEvent} e 
      */
     function handleMouseMove(e) {
+        // Initialize Sound Manager on first user interaction
+        soundManager.init();
+
         const { clientX, clientY, currentTarget } = e;
         const { innerWidth, innerHeight } = window;
         
@@ -105,6 +117,19 @@
     onMount(() => {
         // Initial Health Check
         checkSystemHealth();
+
+        // Connect Global WebSocket Service
+    // @ts-ignore
+    webSocketService.connect();
+
+        // Initialize AudioContext on first user interaction
+        const initAudio = () => {
+            soundManager.init();
+            window.removeEventListener('click', initAudio);
+            window.removeEventListener('keydown', initAudio);
+        };
+        window.addEventListener('click', initAudio);
+        window.addEventListener('keydown', initAudio);
 
         /** @type {number} */
         let frame;
@@ -129,12 +154,27 @@
 
 <svelte:window on:mousemove={handleMouseMove} />
 
-<GameController />
-
 <main class="relative w-full h-screen overflow-hidden bg-tech-dark text-white font-tech selection:bg-neon-blue/30 perspective-1000">
+    <!-- Initial Loading Overlay -->
+    {#if isLoading}
+        <div class="absolute inset-0 z-[10000] bg-black flex flex-col items-center justify-center transition-opacity duration-1000" class:opacity-0={!isLoading}>
+            <div class="relative w-24 h-24">
+                <div class="absolute inset-0 border-t-2 border-neon-blue rounded-full animate-spin"></div>
+                <div class="absolute inset-2 border-r-2 border-neon-purple rounded-full animate-spin-slow"></div>
+                <div class="absolute inset-0 flex items-center justify-center">
+                    <span class="text-2xl animate-pulse">🌐</span>
+                </div>
+            </div>
+            <div class="mt-8 font-mono text-neon-blue tracking-[0.5em] text-sm animate-pulse">INITIALIZING SYSTEM...</div>
+            <div class="mt-2 font-mono text-white/50 text-xs">ESTABLISHING SATELLITE LINK</div>
+        </div>
+    {/if}
+
     <!-- CRT Effects -->
-    <div class="scanline"></div>
-    <div class="absolute inset-0 pointer-events-none z-[9999] shadow-[inset_0_0_100px_rgba(0,0,0,0.9)]"></div> <!-- Vignette -->
+    <div class="scanline opacity-20"></div>
+    <div class="absolute inset-0 pointer-events-none z-[9999] shadow-[inset_0_0_100px_rgba(0,0,0,0.5)] mix-blend-multiply"></div> <!-- Vignette (Lighter) -->
+    <!-- Glass Reflection / Atmosphere -->
+    <div class="absolute inset-0 pointer-events-none z-[5] bg-radial-gradient from-transparent via-transparent to-neon-blue/5 opacity-50"></div>
     
     <!-- Map Layer (Background - Static) -->
     <div class="absolute inset-0 w-full h-full z-0 pointer-events-auto">
@@ -185,40 +225,21 @@
         <!-- Middle: Floating Windows Space -->
         <div class="flex-1 relative w-full h-full pointer-events-none">
             <!-- Windows container, allowing dragging everywhere -->
-            <DraggableWindow id="feed" title="SATELLITE UPLINK" icon="📡">
-                <NewsFeed />
-            </DraggableWindow>
-
-            <DraggableWindow id="timeline" title="MONTHLY SUMMARY" icon="⏱">
-                <MonthlySummary />
-            </DraggableWindow>
-            
-            <DraggableWindow id="countries" title="REGIONAL STATUS" icon="🌍">
-                <CountriesContent />
-            </DraggableWindow>
-            
-            {#if $windowState.corpus?.visible}
-                <CorpusViewer id="corpus" />
-            {/if}
-
-            <DraggableWindow id="stats" title="GLOBAL INTEL" icon="📊" initialX={window.innerWidth - 420} initialY={450}>
-                <StatsContent />
-            </DraggableWindow>
-
-            <DraggableWindow id="analytics" title="QUANTITATIVE ANALYTICS" icon="📉" initialX={60} initialY={160}>
-                <AnalysisWindow />
-            </DraggableWindow>
-
-            {#if $windowState.mediaAtlas?.visible}
-                <DraggableWindow id="mediaAtlas" title="MEDIA ATLAS" icon="🌐" initialX={400} initialY={150}>
-                    <MediaAtlasContent />
+            {#if $windowState.brain?.visible}
+                <DraggableWindow id="brain" title="NARRATIVE INTELLIGENCE" icon="🧠">
+                    <BrainDashboard />
                 </DraggableWindow>
             {/if}
+            {#if $windowState.systemMonitor?.visible}
+        <DraggableWindow id="systemMonitor" title="SYSTEM MONITOR" icon="📊" initialX={200} initialY={100} width="600px" height="450px">
+            <SystemMonitorWindow />
+        </DraggableWindow>
+    {/if}
         </div>
 
         <!-- Bottom: Command Bar -->
         <div class="w-full flex justify-center pb-4 pointer-events-auto">
-            <CommandBar {systemStatus} />
+            <CommandBar systemStatus={$systemStatus} />
         </div>
     </div>
 </main>

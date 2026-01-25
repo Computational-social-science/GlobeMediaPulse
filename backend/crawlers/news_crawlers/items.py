@@ -25,6 +25,7 @@ class NewsArticleItem(scrapy.Item):
     language = scrapy.Field()
     country_code = scrapy.Field()
     country_name = scrapy.Field()
+    country_confidence = scrapy.Field() # 'high' (Seed/Override), 'medium' (GeoJSON), 'low' (TLD), 'unknown'
     
     # Debugging Data
     raw_html = scrapy.Field()

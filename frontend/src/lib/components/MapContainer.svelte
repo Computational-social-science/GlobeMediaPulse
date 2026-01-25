@@ -1,6 +1,7 @@
 <script>
     import { onMount, onDestroy } from 'svelte';
-    import { latestNewsItem, countryStats, mapMode, heatmapEnabled, is3DMode, simulationDate, timeScale, isPlaying } from '../stores.js';
+    import { latestNewsItem, countryStats, mapMode, heatmapEnabled, newsEvents, systemStatus } from '../stores.js';
+    import { soundManager } from '../audio/SoundManager.js';
     import { DATA } from '../data.js';
     import maplibregl from 'maplibre-gl';
 
@@ -15,7 +16,7 @@
     
     /** @type {any[]} */
     let updateBuffer = [];
-    $: isLiveMode = $timeScale === 'live' || ($timeScale === 'day' && $simulationDate && new Date($simulationDate).toDateString() === new Date().toDateString());
+    $: isLiveMode = true; // Always live in this version
     // Allow visualization if Live, Simulating (Playing), or if we are just receiving data stream
     $: isVisualizing = true;
 
@@ -48,7 +49,7 @@
                 {
                     id: 'background',
                     type: 'background',
-                    paint: { 'background-color': '#050505' }
+                    paint: { 'background-color': '#f1f5f9' }
                 },
                 {
                     id: 'osm',
@@ -64,7 +65,7 @@
                 }
             ]
         },
-        vector: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
+        vector: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
     };
 
     const INITIAL_VIEW = { center: [0, 20], zoom: 2 };
@@ -89,6 +90,10 @@
     let currentPopup = null;
     /** @type {any} */
     let scanMarker = null; // For News Stream (Cyan Dot)
+    /** @type {any} */
+    let scanLabelMarker = null; // For "Scanning [Country]" Label
+    /** @type {any} */
+    let serverMarker = null; // Server Location Marker (Los Angeles)
     const countryPolygonsByCode = new Map();
 
     // Reactive Map Controls
@@ -96,137 +101,264 @@
         try {
             // Register dependencies
             // @ts-ignore
-            const _dependencies = [$heatmapEnabled, $is3DMode];
+            const _dependencies = [$heatmapEnabled];
 
             // Toggle Heatmap
             if (map.getLayer(LAYERS.heat)) {
                 map.setLayoutProperty(LAYERS.heat, 'visibility', $heatmapEnabled ? 'visible' : 'none');
             }
-
-            // Sync 3D Mode (Terrain & Pitch)
-            update3DMode();
         } catch (e) {
             console.error("Error in reactive map controls:", e);
         }
     }
 
-    function update3DMode() {
-        if (!map || !mapLoaded) return;
-        
+    /**
+     * Applies a Tech/Commercial Game style override to the current map style.
+     * PROFESSIONAL VERSION: Muted Slate/Grey palette, not too bright.
+     */
+    function applyTechStyle() {
+        if (!map) return;
+        const style = map.getStyle();
+        if (!style || !style.layers) return;
+
+        // Professional Muted Palette
+        const COLORS = {
+            background: '#f1f5f9', // Slate 100 (Softer than white)
+            water: '#cbd5e1',      // Slate 300 (Muted Blue-Grey)
+            waterOutline: '#94a3b8', // Slate 400
+            land: '#e2e8f0',       // Slate 200 (Soft Grey)
+            boundary: '#64748b',   // Slate 500 (Visible but not neon)
+            road: '#cbd5e1',       // Slate 300
+            roadMajor: '#94a3b8',  // Slate 400
+            text: '#334155',       // Slate 700
+            textHalo: '#f1f5f9'    // Slate 100 Halo
+        };
+
+        style.layers.forEach(layer => {
+            // Background
+            if (layer.type === 'background') {
+                map.setPaintProperty(layer.id, 'background-color', COLORS.background);
+                // @ts-ignore
+                if (map.getPaintProperty(layer.id, 'background-opacity') !== undefined) {
+                     map.setPaintProperty(layer.id, 'background-opacity', 1);
+                }
+            }
+            
+            // Water
+            if (layer.id.includes('water')) {
+                if (layer.type === 'fill') {
+                    map.setPaintProperty(layer.id, 'fill-color', COLORS.water);
+                } else if (layer.type === 'line') {
+                    map.setPaintProperty(layer.id, 'line-color', COLORS.waterOutline);
+                }
+            }
+
+            // Land
+            if (layer.id.includes('land') || layer.id.includes('usage') || layer.id.includes('urban')) {
+                 if (layer.type === 'fill') {
+                    map.setPaintProperty(layer.id, 'fill-color', COLORS.land);
+                }
+            }
+
+            // Boundaries (Admin)
+            if (layer.id.includes('admin') || layer.id.includes('boundary')) {
+                if (layer.type === 'line') {
+                    map.setPaintProperty(layer.id, 'line-color', COLORS.boundary);
+                    map.setPaintProperty(layer.id, 'line-width', 0.8);
+                    map.setPaintProperty(layer.id, 'line-opacity', 0.6);
+                }
+            }
+
+            // Roads
+            if (layer.id.includes('road') || layer.id.includes('tunnel') || layer.id.includes('bridge')) {
+                if (layer.type === 'line') {
+                    map.setPaintProperty(layer.id, 'line-color', COLORS.road);
+                }
+            }
+            
+            // Labels
+            if (layer.type === 'symbol') {
+                 if (layer.layout && layer.layout['text-field']) {
+                    map.setPaintProperty(layer.id, 'text-color', COLORS.text);
+                    map.setPaintProperty(layer.id, 'text-halo-color', COLORS.textHalo);
+                    map.setPaintProperty(layer.id, 'text-halo-width', 1);
+                 }
+            }
+        });
+    }
+
+    // --- WebSocket & Real-time Visualization ---
+    
+    // Total Sources Counter
+    let totalSources = 0;
+    
+    // Subscribe to global news events from store
+    $: if ($newsEvents) {
+        handleNewsEvent($newsEvents);
+    }
+
+    onMount(async () => {
+        // Fetch Initial Stats
         try {
-            if ($is3DMode) {
-                // Enable Terrain (Raster DEM)
-                if (!map.getSource('terrain-source')) {
-                    map.addSource('terrain-source', {
-                        type: 'raster-dem',
-                        tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
-                        encoding: 'terrarium',
-                        tileSize: 256,
-                        maxzoom: 15,
-                        attribution: '&copy; Mapzen &copy; OpenStreetMap'
-                    });
-                }
-                
-                // Apply Terrain if missing
-                if (!map.getTerrain()) {
-                    map.setTerrain({ source: 'terrain-source', exaggeration: 1.5 });
-                }
-
-                // Add 3D Buildings (City Streets)
-                if (!map.getLayer('3d-buildings')) {
-                    const layers = map.getStyle().layers;
-                    let labelLayerId;
-                    for (let i = 0; i < layers.length; i++) {
-                        // @ts-ignore
-                        if (layers[i].type === 'symbol' && layers[i].layout['text-field']) {
-                            labelLayerId = layers[i].id;
-                            break;
-                        }
-                    }
-
-                    // Attempt to add buildings from 'carto' source (OpenMapTiles schema)
-                    if (map.getSource('carto')) {
-                         map.addLayer({
-                            'id': '3d-buildings',
-                            'source': 'carto',
-                            'source-layer': 'building',
-                            'filter': ['==', 'extrude', 'true'],
-                            'type': 'fill-extrusion',
-                            'minzoom': 13,
-                            'paint': {
-                                'fill-extrusion-color': '#2a2a2a',
-                                'fill-extrusion-height': ['get', 'render_height'],
-                                'fill-extrusion-base': ['get', 'render_min_height'],
-                                'fill-extrusion-opacity': 0.8
-                            }
-                        }, labelLayerId);
-                    } else if (map.getSource('openmaptiles')) {
-                        map.addLayer({
-                            'id': '3d-buildings',
-                            'source': 'openmaptiles',
-                            'source-layer': 'building',
-                            'filter': ['==', 'extrude', 'true'],
-                            'type': 'fill-extrusion',
-                            'minzoom': 13,
-                            'paint': {
-                                'fill-extrusion-color': '#2a2a2a',
-                                'fill-extrusion-height': ['get', 'render_height'],
-                                'fill-extrusion-base': ['get', 'render_min_height'],
-                                'fill-extrusion-opacity': 0.8
-                            }
-                        }, labelLayerId);
-                    } else {
-                        console.warn('No suitable vector source found for 3D buildings.');
-                    }
-                }
-                
-                // Add Atmospheric Fog for Depth (Idempotent)
-                // Check if setFog is supported (MapLibre GL JS v2+)
-                // @ts-ignore
-                if (map.setFog) {
-                    // @ts-ignore
-                    map.setFog({
-                        'range': [0.5, 10],
-                        'color': '#050510',      // Deep dark blue-black
-                        'high-color': '#000000', // Pitch black sky
-                        'horizon-blend': 0.2
-                    });
-                }
-
-                // Only animate pitch if it's low (user just switched to 3D)
-                if (map.getPitch() < 30) {
-                    map.easeTo({
-                        pitch: 60,
-                        bearing: -15,
-                        duration: 1000
-                    });
-                }
-            } else {
-                // Disable Terrain & Fog
-                if (map.getTerrain()) {
-                    map.setTerrain(null);
-                }
-                if (map.getLayer('3d-buildings')) {
-                    map.removeLayer('3d-buildings');
-                }
-                // @ts-ignore
-                if (map.setFog) {
-                    // @ts-ignore
-                    map.setFog(null);
-                }
-                
-                // Reset pitch if it's high (user just switched off 3D)
-                if (map.getPitch() > 0) {
-                    map.easeTo({
-                        pitch: 0,
-                        bearing: 0,
-                        duration: 1000
-                    });
+            // Fetch map data which includes total_articles and total_sources
+            const res = await fetch('http://localhost:8002/api/map-data');
+            if (res.ok) {
+                const data = await res.json();
+                if (data.total_sources) {
+                    totalSources = data.total_sources;
                 }
             }
         } catch (e) {
-            console.error("Failed to update 3D mode:", e);
+            console.error("Failed to fetch map stats:", e);
         }
+    });
+
+    /** @type {number} */
+    let lastEventTime = 0;
+    const EVENT_THROTTLE_MS = 200; // Limit to 5 events per second
+
+    /**
+     * @param {any} article
+     */
+    function handleNewsEvent(article) {
+        // Logic Linkage: If system is OFFLINE, ignore incoming data events
+        if ($systemStatus === 'OFFLINE') return;
+
+        if (!mapLoaded || !map) return;
+        
+        // Throttle Logic
+        const now = Date.now();
+        if (now - lastEventTime < EVENT_THROTTLE_MS) {
+            return;
+        }
+        lastEventTime = now;
+        
+        // Play Sound
+        soundManager.playDataChirp();
+
+        // Scanning Animation: Update Scan Label
+        const coords = resolveCoordinates(article);
+        if (coords) {
+            // Remove previous label
+            if (scanLabelMarker) scanLabelMarker.remove();
+
+            // Create new label
+            const labelEl = document.createElement('div');
+            labelEl.className = 'scanning-label';
+            
+            // Visual Fingerprint Integration
+            // If logo_url is present (from backend pipeline), display it.
+            // Otherwise fallback to the pulsing dot.
+            const iconHtml = article.logo_url 
+                ? `<img src="${article.logo_url}" class="w-6 h-6 rounded-full border border-white/20 bg-white object-contain p-0.5" alt="logo" onerror="this.style.display='none'"/>` 
+                : `<div class="w-2 h-2 bg-neon-blue rounded-full animate-ping"></div>`;
+
+            labelEl.innerHTML = `
+                <div class="flex items-center gap-2">
+                    ${iconHtml}
+                    <span class="text-[10px] font-mono font-bold text-neon-blue bg-white/90 px-2 py-1 rounded border border-neon-blue/30 shadow-sm flex flex-col">
+                        <span>SCANNING: ${article.country || 'UNKNOWN'}</span>
+                        ${article.source_domain ? `<span class="text-[8px] text-gray-500 font-normal">${article.source_domain}</span>` : ''}
+                    </span>
+                </div>
+            `;
+            
+            scanLabelMarker = new maplibregl.Marker({
+                element: labelEl,
+                anchor: 'left',
+                offset: [15, 0]
+            })
+            // @ts-ignore
+            .setLngLat(coords)
+            .addTo(map);
+
+            // Auto-remove after 2 seconds
+            setTimeout(() => {
+                if (scanLabelMarker && scanLabelMarker.getElement() === labelEl) {
+                    scanLabelMarker.remove();
+                }
+            }, 2000);
+        }
+
+        
+        // Pulse Server Marker (Throughput Visualization)
+        pulseServer();
+
+        // Find Source Country
+        const countryCode = article.country;
+        // Lookup in DATA.COUNTRIES
+        const country = DATA.COUNTRIES.find(c => c.code === countryCode);
+        
+        if (country) {
+            const sourceCoords = [country.lng, country.lat];
+            // Target: Server Location (Los Angeles, USA) - approx
+            const targetCoords = [-118.24, 34.05]; 
+            
+            addBeam(sourceCoords, targetCoords, article.confidence);
+        }
+    }
+
+    /**
+     * @param {any} start
+     * @param {any} end
+     * @param {string} [confidence] - 'high' | 'medium' | 'low' | 'unknown'
+     */
+    function addBeam(start, end, confidence = 'unknown') {
+        const id = Date.now() + Math.random();
+        const feature = {
+            type: 'Feature',
+            id: id,
+            geometry: {
+                type: 'LineString',
+                coordinates: [start, end]
+            },
+            properties: {
+                timestamp: Date.now(),
+                confidence: confidence
+            }
+        };
+        
+        lineFeatures = [...lineFeatures, feature];
+        updateLinesSource();
+        
+        // Remove after 1.5 seconds (Flash effect)
+        setTimeout(() => {
+            lineFeatures = lineFeatures.filter(f => f.id !== id);
+            updateLinesSource();
+        }, 1500);
+    }
+
+    function updateLinesSource() {
+        if (!map) return;
+        const source = map.getSource(SOURCES.lines);
+        if (source) {
+            // @ts-ignore
+            source.setData({
+                type: 'FeatureCollection',
+                features: lineFeatures
+            });
+        }
+    }
+
+    function setupServerMarker() {
+        if (!map) return;
+        
+        const el = document.createElement('div');
+        el.className = 'server-marker';
+        
+        // Server Location: Los Angeles
+        serverMarker = new maplibregl.Marker({ element: el })
+            .setLngLat([-118.24, 34.05])
+            .addTo(map);
+    }
+
+    function pulseServer() {
+        if (!serverMarker) return;
+        const el = serverMarker.getElement();
+        el.classList.add('pulse');
+        setTimeout(() => {
+            el.classList.remove('pulse');
+        }, 500);
     }
 
     onMount(() => {
@@ -262,11 +394,13 @@
         map.on('load', () => {
             mapLoaded = true;
             try {
+                applyTechStyle(); // Apply Tech Style Override
                 setupLayers();
-                fetchInitialStats();
+                setupServerMarker(); // Initialize Server Marker
+                // fetchInitialStats();
                 loadCountries();
                 // Initial heatmap load based on current state
-                fetchHeatmapData();
+                // fetchHeatmapData();
                 requestAnimationFrame(processBatch);
             } catch (e) {
                 console.error("Error during map load:", e);
@@ -276,6 +410,7 @@
         map.on('style.load', () => {
             if (mapLoaded) {
                 try {
+                    applyTechStyle(); // Apply Tech Style Override
                     setupLayers();
                     if (countriesGeojson) {
                         updateCountriesSource(countriesGeojson);
@@ -284,8 +419,6 @@
                     if (map.getLayer(LAYERS.heat)) {
                         map.setLayoutProperty(LAYERS.heat, 'visibility', $heatmapEnabled ? 'visible' : 'none');
                     }
-                    // Restore 3D Mode
-                    update3DMode();
                 } catch (e) {
                     console.error("Error restoring state after style load:", e);
                 }
@@ -297,6 +430,7 @@
         if (map) map.remove();
         if (currentMarkerTimeout) clearTimeout(currentMarkerTimeout);
         if (scanMarker) scanMarker.remove();
+        if (serverMarker) serverMarker.remove();
     });
 
     /**
@@ -379,18 +513,9 @@
                 type: 'fill',
                 source: SOURCES.countries,
                 paint: {
-                    'fill-color': [
-                        'case',
-                        ['in', ['get', 'code'], ['literal', DATA.ENGLISH_SPEAKING_COUNTRIES]],
-                        '#050505',
-                        '#FFFFFF'
-                    ],
-                    'fill-opacity': [
-                        'case',
-                        ['in', ['get', 'code'], ['literal', DATA.ENGLISH_SPEAKING_COUNTRIES]],
-                        0.8,
-                        0.1
-                    ]
+                    'fill-color': '#e2e8f0', // Slate 200 (Matches Land)
+                    'fill-outline-color': '#94a3b8', // Slate 400 (Subtle Border)
+                    'fill-opacity': 0.5 // Subtle overlay
                 }
             });
         }
@@ -445,10 +570,15 @@
                 type: 'line',
                 source: SOURCES.lines,
                 paint: {
-                    'line-color': '#ff4500',
-                    'line-width': 1,
-                    'line-opacity': 0.6,
-                    'line-dasharray': [2, 2]
+                    'line-color': '#00F3FF', // Neon Blue
+                    'line-width': 2,
+                    'line-opacity': 0.8,
+                    'line-dasharray': [
+                        'match',
+                        ['get', 'confidence'],
+                        'high', ['literal', [1, 0]],   // Solid for High Confidence (Seed)
+                        ['literal', [2, 1]]            // Dashed for Inferred (Medium/Low/Unknown)
+                    ]
                 }
             });
         }
@@ -727,22 +857,9 @@
             if (startStr && endStr) {
                 params.append('start_date', startStr);
                 params.append('end_date', endStr);
-            } else if (!isLiveMode && $simulationDate) {
-                 const date = new Date($simulationDate);
-                 
-                 if ($timeScale === 'overview') {
-                    params.append('start_date', `${date.getFullYear()}-01-01`);
-                    params.append('end_date', `${date.getFullYear()}-12-31`);
-                 } else if ($timeScale === 'year') {
-                    // Monthly view in Year mode
-                    const y = date.getFullYear();
-                    const m = date.getMonth() + 1;
-                    // Last day of month
-                    const lastDay = new Date(y, m, 0).getDate();
-                    params.append('start_date', `${y}-${m.toString().padStart(2, '0')}-01`);
-                    params.append('end_date', `${y}-${m.toString().padStart(2, '0')}-${lastDay}`);
-                 }
             }
+            // Historical simulation logic removed as per new live-only architecture
+
 
             if (params.toString()) {
                 url += `?${params.toString()}`;
@@ -772,36 +889,8 @@
     }
 
     // Reactive Heatmap Update on Date/Scale Change
-    let lastMapFetchKey = '';
-    /** @type {any} */
-    let debounceTimer = null;
-    $: {
-        // Only fetch static heatmap if NOT playing and NOT live
-        // If playing, the stream updates the heatmap dynamically
-        if (mapLoaded && !isLiveMode && !$isPlaying) {
-             const date = $simulationDate;
-             const scale = $timeScale;
-             // Construct a key to prevent redundant fetches
-             let key = `${scale}-${date.getFullYear()}`;
-             if (scale === 'month' || scale === 'day') {
-                 key += `-${date.getMonth()}`;
-             }
-             if (scale === 'day') {
-                 key += `-${date.getDate()}`;
-             }
-             
-             if (key !== lastMapFetchKey) {
-                 lastMapFetchKey = key;
-                 // Debounce slightly for scrubber smoothness
-                 // @ts-ignore
-                 if (debounceTimer) clearTimeout(debounceTimer);
-                 // @ts-ignore
-                 debounceTimer = setTimeout(() => {
-                    fetchHeatmapData();
-                 }, 100);
-             }
-        }
-    }
+    // Removed legacy simulation watchers ($simulationDate, $timeScale, $isPlaying)
+    // as the system is now Live-Only.
 
     /**
      * Main Animation Loop.
@@ -1032,9 +1121,28 @@
             }
         }
     }
+    /**
+     * Resolves coordinates for a news event article.
+     * @param {any} article
+     */
+    function resolveCoordinates(article) {
+        let coords = null;
+        if (article && article.country && article.country !== 'UNK') {
+            coords = getCalibratedLngLat(article.country);
+        }
+        
+        // Fallback for UNK or missing position to ensure visualization
+        if (!coords) {
+             // Assign a random position in the ocean/world map to ensure visibility of the event
+             coords = [(Math.random() * 360) - 180, (Math.random() * 120) - 60];
+        }
+        return coords;
+    }
 </script>
 
-<div class="w-full h-full bg-black z-0" bind:this={mapElement}></div>
+<div class="absolute top-0 left-0 w-full h-full" bind:this={mapElement}></div>
+
+
 
 <style>
     :global(.maplibregl-popup-content) {
@@ -1070,6 +1178,26 @@
         border-radius: 50%;
         box-shadow: 0 0 10px #00f3ff;
         transition: all 0.5s ease-out;
+    }
+
+    :global(.server-marker) {
+        width: 20px;
+        height: 20px;
+        background: radial-gradient(circle, #22d3ee 40%, rgba(34, 211, 238, 0.2) 70%);
+        border: 2px solid #22d3ee;
+        border-radius: 50%;
+        box-shadow: 0 0 15px #22d3ee;
+        z-index: 50;
+    }
+    
+    :global(.server-marker.pulse) {
+        animation: server-pulse 0.5s ease-out;
+    }
+
+    @keyframes server-pulse {
+        0% { transform: scale(1); box-shadow: 0 0 15px #22d3ee; filter: brightness(1); }
+        50% { transform: scale(1.5); box-shadow: 0 0 30px #22d3ee; filter: brightness(2); background: #fff; }
+        100% { transform: scale(1); box-shadow: 0 0 15px #22d3ee; filter: brightness(1); }
     }
 
     :global(.neon-popup .maplibregl-popup-content) {

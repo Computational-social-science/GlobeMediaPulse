@@ -9,16 +9,12 @@ import { writable } from 'svelte/store';
 /** @type {import('svelte/store').Writable<any[]>} */
 export const newsFeed = writable([]); // Store for the list of fetched news articles
 
-// Playback Control Stores
-export const isPaused = writable(false); // Controls whether the simulation/feed is paused
-export const isPlaying = writable(false); // Controls the auto-play state of the simulation
-export const playbackSpeed = writable(1.0); // Multiplier for playback speed
-
 // User Interface Configuration Stores
 export const mapMode = writable('vector'); // Map rendering mode: 'osm' (OpenStreetMap) or 'vector'
 export const soundEnabled = writable(true); // Toggle for application sound effects
+export const audioEnabled = soundEnabled; // Alias for SoundManager compatibility
+export const audioVolume = writable(0.5); // Master volume for sound effects
 export const heatmapEnabled = writable(true); // Toggle for the heatmap visualization layer
-export const is3DMode = writable(false); // Toggle for 3D map visualization
 
 // Map View State
 export const mapState = writable({
@@ -27,18 +23,13 @@ export const mapState = writable({
     center: [20, 0] // Current map center coordinates [lng, lat]
 });
 
-// Game/Simulation Statistics
-export const gameStats = writable({
-    totalItems: 0, // Total number of processed news items
-    totalErrors: 0, // Total number of detected spelling/grammar errors
-    totalWords: 0, // Total word count processed
-    accuracy: 100 // Calculated accuracy percentage
-});
-
 // Simulation Time Control
-export const simulationDate = writable(new Date()); // Current date in the simulation context
-export const timeScale = writable('live'); // Time aggregation scale: 'live', 'year', or 'overview'
 export const isConnected = writable(false); // WebSocket connection status indicator
+export const systemStatus = writable('OFFLINE'); // Global System Status (ONLINE, OFFLINE, DEGRADED)
+export const newsEvents = writable(null); // Store for real-time news events (for Data-Flow visualization)
+/** @type {import('svelte/store').Writable<any[]>} */
+export const systemLogs = writable([]); // Store for real-time system logs
+
 export const countrySourceFilter = writable('all');
 
 // Restored Functionality Stores
@@ -52,11 +43,8 @@ export const timelineData = writable([]); // Historical data snapshots for the t
  * @type {import('svelte/store').Writable<Record<string, any>>} 
  */
 export const windowState = writable({
-    feed: { visible: true, minimized: false, maximized: false, position: { x: 20, y: 100 } },
-    timeline: { visible: true, minimized: false, maximized: false, position: { x: 100, y: 100 } },
-    countries: { visible: false, minimized: false, maximized: false, position: { x: 150, y: 150 } },
-    corpus: { visible: false, minimized: false, maximized: false, position: { x: 300, y: 100 } },
-    mediaAtlas: { visible: false, minimized: false, maximized: false, position: { x: 400, y: 150 } }
+    brain: { visible: true, minimized: false, maximized: false, position: { x: 20, y: 100 } },
+    systemMonitor: { visible: false, minimized: false, maximized: false, position: { x: 100, y: 100 } }
 });
 
 export const latestNewsItem = writable(null); // The most recently processed news item, used to trigger reactive updates
@@ -68,4 +56,9 @@ export const mediaSources = writable([]); // List of all media sources
 export const serviceStatus = writable({
     postgres: 'unknown', // Connection status of the PostgreSQL database
     redis: 'unknown' // Connection status of the Redis cache
+});
+export const backendThreadStatus = writable({
+    crawler: 'unknown',
+    analyzer: 'unknown',
+    cleanup: 'unknown'
 });

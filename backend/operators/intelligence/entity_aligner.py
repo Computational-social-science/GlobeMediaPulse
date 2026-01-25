@@ -23,6 +23,45 @@ class EntityAlignerOperator:
         self.enabled = False
         self.nlp = None
         
+        # Local Normalization Map (Entity Linking Cache)
+        # Maps common surface forms to Wikidata QIDs directly to avoid API latency
+        self.static_mapping = {
+            # United States
+            "united states": "Q30", "usa": "Q30", "u.s.": "Q30", "us": "Q30", "america": "Q30",
+            # China
+            "china": "Q148", "prc": "Q148", "people's republic of china": "Q148",
+            # Russia
+            "russia": "Q159", "russian federation": "Q159", "moscow": "Q159",
+            # Ukraine
+            "ukraine": "Q212", "kiev": "Q212", "kyiv": "Q212",
+            # European Union
+            "eu": "Q458", "european union": "Q458",
+            # NATO
+            "nato": "Q7184", "north atlantic treaty organization": "Q7184",
+            # United Kingdom
+            "uk": "Q145", "united kingdom": "Q145", "britain": "Q145",
+            # Germany
+            "germany": "Q183", "deutschland": "Q183",
+            # France
+            "france": "Q142",
+            # Japan
+            "japan": "Q17",
+            # India
+            "india": "Q668",
+            # Israel
+            "israel": "Q801",
+            # Palestine
+            "palestine": "Q219060", "gaza": "Q39760",
+            # Taiwan
+            "taiwan": "Q865", "roc": "Q865",
+            # Iran
+            "iran": "Q794",
+            # North Korea
+            "north korea": "Q423", "dprk": "Q423",
+            # South Korea
+            "south korea": "Q884", "rok": "Q884",
+        }
+        
         if not spacy:
             logger.warning("SpaCy not installed. Entity Alignment disabled.")
             return
@@ -37,13 +76,18 @@ class EntityAlignerOperator:
         except Exception as e:
             logger.error(f"Failed to load NER model: {e}")
             self.enabled = False
-            
+
     def get_wikidata_qid(self, entity_text: str, language: str = "en") -> Optional[str]:
         """
         Queries Wikidata API to resolve an entity text to a QID.
         """
         if not entity_text:
             return None
+            
+        # 1. Check Local Static Map first (O(1) lookup)
+        normalized_text = entity_text.lower().strip()
+        if normalized_text in self.static_mapping:
+            return self.static_mapping[normalized_text]
             
         url = "https://www.wikidata.org/w/api.php"
         params = {

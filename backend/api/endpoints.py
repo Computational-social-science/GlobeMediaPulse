@@ -53,6 +53,13 @@ def get_media_sources() -> List[Dict[str, Any]]:
     """
     return storage_operator.get_all_media_sources()
 
+@router.get("/stats/brain")
+def get_brain_stats() -> Dict[str, Any]:
+    """
+    Get aggregated intelligence stats (Entities, Narrative Divergence).
+    """
+    return storage_operator.get_brain_stats()
+
 @router.get("/health")
 def health_check() -> Dict[str, str]:
     """

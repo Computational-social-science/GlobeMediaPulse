@@ -34,9 +34,9 @@ jobs:
         run: npm run build
         env:
           # Inject production backend URL
-          VITE_API_URL: https://globemediapulse-backend-production.fly.dev
+          VITE_API_URL: https://globe-media-pulse.fly.dev
           # Inject production WebSocket URL
-          VITE_WS_URL: wss://globemediapulse-backend-production.fly.dev
+          VITE_WS_URL: wss://globe-media-pulse.fly.dev
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
