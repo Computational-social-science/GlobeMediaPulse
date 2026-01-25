@@ -17,3 +17,8 @@ python-multipart
 websockets
 imagehash
 Pillow
+spacy
+transformers
+torch --extra-index-url https://download.pytorch.org/whl/cpu
+sentencepiece
+protobuf

@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, func
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, Float, func
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.dialects.postgresql import JSONB
 
 class Base(DeclarativeBase):
     """Base class for all SQLAlchemy models."""
@@ -62,6 +63,17 @@ class NewsArticle(Base):
     
     # URL Hashing Strategy (Added)
     url_hash = Column(String(64), index=True, nullable=True) # SHA-256 Hash
+
+    # Intelligence & Analysis (The "Brain")
+    # Cross-Lingual Entity Alignment
+    entities = Column(JSONB, nullable=True) # Extracted entities and QIDs
+    
+    # Narrative Divergence
+    sentiment_score = Column(Float, nullable=True) # -1.0 to 1.0
+    
+    # Ethical Firewall
+    safety_label = Column(Text, nullable=True) # e.g., "safe", "toxic", "hate_speech"
+    safety_score = Column(Float, nullable=True) # Confidence score 0.0-1.0
 
 class UrlLibrary(Base):
     """

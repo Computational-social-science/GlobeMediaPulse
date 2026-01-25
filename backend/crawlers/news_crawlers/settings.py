@@ -42,7 +42,10 @@ DEFAULT_REQUEST_HEADERS = {
 # 400: Storage (Persistence)
 ITEM_PIPELINES = {
    "news_crawlers.pipelines.ClassificationPipeline": 300,
+   "news_crawlers.pipelines.EthicalFirewallPipeline": 320,
    "news_crawlers.pipelines.VisualFingerprintPipeline": 350,
+   "news_crawlers.pipelines.EntityAlignmentPipeline": 360,
+   "news_crawlers.pipelines.NarrativeAnalysisPipeline": 370,
    "news_crawlers.pipelines.PostgresStoragePipeline": 400,
    # RedisPipeline can be enabled for distributed post-processing
    # 'scrapy_redis.pipelines.RedisPipeline': 400,

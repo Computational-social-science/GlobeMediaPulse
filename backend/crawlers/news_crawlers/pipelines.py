@@ -14,9 +14,79 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
 from backend.operators.storage import storage_operator
 from backend.operators.intelligence.source_classifier import source_classifier
 from backend.operators.vision.fingerprinter import visual_fingerprinter
+from backend.operators.security.ethical_firewall import ethical_firewall
+from backend.operators.intelligence.entity_aligner import entity_aligner
+from backend.operators.intelligence.narrative_analyst import narrative_analyst
 from news_crawlers.items import CandidateSourceItem, SourceUpdateItem
+from scrapy.exceptions import DropItem
 
 logger = logging.getLogger(__name__)
+
+class EthicalFirewallPipeline:
+    """
+    Intelligence Pipeline Stage 1.5: Ethical Firewall.
+    
+    Research Motivation:
+        - Filters out NSFW, Toxic, or Extremist content using 'safety-bert'.
+        - Prevents pollution of the dataset with high-risk material.
+    """
+    def process_item(self, item, spider):
+        if isinstance(item, (CandidateSourceItem, SourceUpdateItem)):
+            return item
+            
+        adapter = ItemAdapter(item)
+        text_content = f"{adapter.get('title', '')} {adapter.get('description', '')}"
+        
+        is_safe, label, score = ethical_firewall.check_safety(text_content)
+        
+        # Enforce Firewall
+        if not is_safe:
+            spider.logger.warning(f"Ethical Firewall Dropped: {adapter.get('url')} [{label}:{score:.2f}]")
+            raise DropItem(f"Unsafe content detected: {label}")
+            
+        # Enrich with Safety Metadata
+        adapter['safety_label'] = label
+        adapter['safety_score'] = score
+        
+        return item
+
+class EntityAlignmentPipeline:
+    """
+    Intelligence Pipeline Stage 3: Cross-Lingual Entity Alignment.
+    
+    Research Motivation:
+        - Maps entities to Wikidata QIDs for global aggregation.
+    """
+    def process_item(self, item, spider):
+        if isinstance(item, (CandidateSourceItem, SourceUpdateItem)):
+            return item
+            
+        adapter = ItemAdapter(item)
+        text_content = f"{adapter.get('title', '')} {adapter.get('description', '')}"
+        
+        entities = entity_aligner.extract_and_align(text_content)
+        adapter['entities'] = entities
+        
+        return item
+
+class NarrativeAnalysisPipeline:
+    """
+    Intelligence Pipeline Stage 4: Narrative Divergence Analysis.
+    
+    Research Motivation:
+        - Computes sentiment scores to track narrative stance.
+    """
+    def process_item(self, item, spider):
+        if isinstance(item, (CandidateSourceItem, SourceUpdateItem)):
+            return item
+            
+        adapter = ItemAdapter(item)
+        text_content = f"{adapter.get('title', '')} {adapter.get('description', '')}"
+        
+        sentiment_score = narrative_analyst.analyze_sentiment(text_content)
+        adapter['sentiment_score'] = sentiment_score
+        
+        return item
 
 class VisualFingerprintPipeline:
     """
@@ -118,6 +188,11 @@ class PostgresStoragePipeline:
             "country_name": adapter.get('country_name'),
             "source_tier": adapter.get('source_tier'),
             "source_domain": adapter.get('source_domain'),
+            # Brain Metadata
+            "entities": adapter.get('entities'),
+            "sentiment_score": adapter.get('sentiment_score'),
+            "safety_label": adapter.get('safety_label'),
+            "safety_score": adapter.get('safety_score'),
         }
         
         try:
