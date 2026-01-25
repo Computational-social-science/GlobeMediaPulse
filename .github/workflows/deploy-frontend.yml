@@ -1,11 +1,11 @@
-name: Deploy to GitHub Pages
+name: Deploy Frontend
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
-      - 'frontend/**'
-      - '.github/workflows/deploy-gh-pages.yml'
+      - "frontend/**"
+      - ".github/workflows/deploy-frontend.yml"
   workflow_dispatch:
 
 permissions:
@@ -27,20 +27,15 @@ jobs:
 
       - name: Install Dependencies
         working-directory: ./frontend
-        run: npm install
+        run: npm ci
 
       - name: Build
         working-directory: ./frontend
         run: npm run build
-        env:
-          # Inject production backend URL
-          VITE_API_URL: https://globe-media-pulse.fly.dev
-          # Inject production WebSocket URL
-          VITE_WS_URL: wss://globe-media-pulse.fly.dev
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: frontend/dist # The folder to deploy
-          branch: gh-pages # The branch to deploy to
-          clean: true # Automatically remove deleted files from the deploy branch
+          folder: frontend/dist
+          branch: gh-pages
+          clean: true
