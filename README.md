@@ -3,6 +3,10 @@
 
 Target Journal: *Nature Human Behaviour*
 
+## Deployment Status
+- **Backend (Fly.io)**: [https://globe-media-pulse.fly.dev](https://globe-media-pulse.fly.dev)
+- **Frontend (GitHub Pages)**: [https://computational-social-science.github.io/globe-media-pulse/](https://computational-social-science.github.io/globe-media-pulse/)
+
 ## Overview
 This project investigates spelling errors in global English news (2016–Present) as emergent behavioural traces of national news production systems. By analyzing the statistical structure of spelling errors across 195+ countries, we aim to identify stable, comparable, and evolving "fingerprints" of human behaviour.
 
