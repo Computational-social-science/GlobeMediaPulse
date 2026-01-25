@@ -13,9 +13,29 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
 
 from backend.operators.storage import storage_operator
 from backend.operators.intelligence.source_classifier import source_classifier
+from backend.operators.vision.fingerprinter import visual_fingerprinter
 from news_crawlers.items import CandidateSourceItem, SourceUpdateItem
 
 logger = logging.getLogger(__name__)
+
+class VisualFingerprintPipeline:
+    """
+    Intelligence Pipeline Stage 2: Visual & Textual Fingerprinting.
+    
+    Research Motivation:
+        - Downloads logos and computes pHash for 'Sockpuppet' detection.
+    """
+    def process_item(self, item, spider):
+        if isinstance(item, SourceUpdateItem):
+            adapter = ItemAdapter(item)
+            logo_url = adapter.get('logo_url')
+            
+            if logo_url:
+                logger.debug(f"Computing logo hash for {logo_url}")
+                logo_hash = visual_fingerprinter.compute_logo_hash(logo_url)
+                adapter['logo_hash'] = logo_hash
+                
+        return item
 
 class ClassificationPipeline:
     """
@@ -74,6 +94,8 @@ class PostgresStoragePipeline:
             update_data = {
                 "domain": adapter.get('domain'),
                 "logo_url": adapter.get('logo_url'),
+                "logo_hash": adapter.get('logo_hash'),
+                "copyright_text": adapter.get('copyright_text'),
                 "structure_simhash": adapter.get('structure_simhash'),
             }
             try:

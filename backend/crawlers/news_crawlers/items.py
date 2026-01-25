@@ -51,5 +51,7 @@ class SourceUpdateItem(scrapy.Item):
     """
     domain = scrapy.Field()
     logo_url = scrapy.Field()
+    logo_hash = scrapy.Field()          # Visual Fingerprint (pHash)
+    copyright_text = scrapy.Field()     # Textual Fingerprint
     structure_simhash = scrapy.Field()
     http_status = scrapy.Field()

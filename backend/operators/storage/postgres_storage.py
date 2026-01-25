@@ -216,10 +216,18 @@ class PostgresStorageOperator:
                     cursor.execute("""
                         UPDATE media_sources
                         SET logo_url = COALESCE(%s, logo_url),
+                            logo_hash = COALESCE(%s, logo_hash),
+                            copyright_text = COALESCE(%s, copyright_text),
                             structure_simhash = COALESCE(%s, structure_simhash),
                             updated_at = NOW()
                         WHERE domain = %s
-                    """, (update_data.get("logo_url"), update_data.get("structure_simhash"), domain))
+                    """, (
+                        update_data.get("logo_url"), 
+                        update_data.get("logo_hash"),
+                        update_data.get("copyright_text"),
+                        update_data.get("structure_simhash"), 
+                        domain
+                    ))
                     conn.commit()
         except Exception as e:
             logger.error(f"Error updating media source {update_data.get('domain')}: {e}")

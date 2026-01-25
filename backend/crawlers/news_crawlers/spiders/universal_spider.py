@@ -6,6 +6,7 @@ from news_crawlers.items import NewsArticleItem, CandidateSourceItem, SourceUpda
 import trafilatura
 from urllib.parse import urlparse
 from backend.utils.simhash import compute_structural_simhash
+from backend.operators.vision.fingerprinter import visual_fingerprinter
 
 class UniversalNewsSpider(scrapy.Spider):
     """
@@ -66,10 +67,14 @@ class UniversalNewsSpider(scrapy.Spider):
         if logo_url:
             logo_url = response.urljoin(logo_url)
             
+        # Extract Copyright Text (Textual Fingerprint)
+        copyright_text = visual_fingerprinter.extract_copyright(response.text)
+            
         # Yield Source Update Item (for metadata persistence)
         update_item = SourceUpdateItem()
         update_item['domain'] = current_domain
         update_item['logo_url'] = logo_url
+        update_item['copyright_text'] = copyright_text
         update_item['structure_simhash'] = simhash
         yield update_item
 

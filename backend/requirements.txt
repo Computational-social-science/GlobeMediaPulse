@@ -15,3 +15,5 @@ pytest
 jinja2
 python-multipart
 websockets
+imagehash
+Pillow

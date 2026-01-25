@@ -108,6 +108,8 @@ class MediaSource(Base):
     
     # Branding & UI
     logo_url = Column(Text, nullable=True)
+    logo_hash = Column(Text, nullable=True, index=True) # Visual Fingerprint
+    copyright_text = Column(Text, nullable=True) # Textual Fingerprint
     
     # Structural Fingerprinting
     # SimHash for homepage structure/layout (not content) to detect design changes
