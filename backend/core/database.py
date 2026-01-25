@@ -62,9 +62,9 @@ class DatabaseManager:
         for i in range(max_retries):
             try:
                 # minconn=1: Keep at least one connection open to reduce latency for the first request.
-                # maxconn=20: Limit concurrency to prevent overwhelming the database server.
+                # maxconn=40: Increased from 20 to 40 to support higher Scrapy concurrency (64 threads).
                 self._pool = psycopg2.pool.ThreadedConnectionPool(
-                    minconn=1, maxconn=20, dsn=db_url
+                    minconn=1, maxconn=40, dsn=db_url
                 )
                 logger.info("Global PostgreSQL Connection Pool initialized successfully.")
                 break

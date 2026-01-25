@@ -16,13 +16,14 @@ NEWSPIDER_MODULE = "backend.crawlers.news_crawlers.spiders"
 ROBOTSTXT_OBEY = True
 
 # Concurrency & Performance Tuning
-# Research Motivation: High throughput is required to monitor global media, but we must be polite.
-# CONCURRENT_REQUESTS = 32: Aggressive parallelism for throughput.
-CONCURRENT_REQUESTS = 32
+# Research Motivation: High throughput is required to monitor global media.
+# CONCURRENT_REQUESTS = 64: Increased from 32 to accelerate media discovery.
+# WARNING: Ensure system resources (CPU/RAM) and DB connections are sufficient.
+CONCURRENT_REQUESTS = 64
 
 # Rate Limiting
-# DOWNLOAD_DELAY = 1: 1-second pause between requests to the same domain to avoid DoS triggers.
-DOWNLOAD_DELAY = 1
+# DOWNLOAD_DELAY = 0.5: Reduced from 1s to 0.5s to speed up crawling while remaining reasonably polite.
+DOWNLOAD_DELAY = 0.5
 
 # Disable cookies to prevent tracking and session issues
 COOKIES_ENABLED = False
@@ -79,5 +80,8 @@ DOWNLOAD_HANDLERS = {
 }
 PLAYWRIGHT_LAUNCH_OPTIONS = {
     "headless": True,
-    "timeout": 20000,  # 20 seconds timeout to fail fast on slow sites
+    "timeout": 30000,  # Increased to 30s to reduce timeout failures under high load
+    "args": ["--disable-gpu", "--no-sandbox"] # Optimization for server environments
 }
+# Optimize Twisted Reactor for high concurrency
+REACTOR_THREADPOOL_MAXSIZE = 30
