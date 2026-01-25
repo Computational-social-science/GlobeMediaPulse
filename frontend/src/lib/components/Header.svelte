@@ -34,8 +34,8 @@
     <!-- Left: Brand Identity -->
     <div class="flex items-center gap-4">
         <div class="flex flex-col">
-            <h1 class="text-xl font-bold tracking-[0.2em] text-white leading-none">SPELL ATLAS</h1>
-            <span class="text-[0.6rem] text-neon-blue font-mono tracking-widest opacity-70">Uncharted fingerprints of human misspelling behavior</span>
+            <h1 class="text-xl font-bold tracking-[0.2em] text-white leading-none">GLOBE MEDIA PULSE</h1>
+            <span class="text-xs text-neon-blue font-mono tracking-widest opacity-70">Uncharted pulse of globe media</span>
         </div>
     </div>
 

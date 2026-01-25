@@ -1,6 +1,6 @@
 # Globe Media Pulse: A Computational Observatory for the Global Media Ecosystem
+> **Uncharted pulse of globe media**
 
-**Target Journal**: *Nature Human Behaviour*  
 **Status**: Active Development (v2.0 - "Snowball Discovery" Phase)
 
 ## 1. Scientific Motivation
