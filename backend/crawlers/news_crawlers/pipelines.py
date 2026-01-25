@@ -13,11 +13,14 @@ from itemadapter import ItemAdapter
 # Add project root to path to import backend modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
+logger = logging.getLogger(__name__)
+
 # Optional Spacy Import
 try:
     import spacy
     SPACY_AVAILABLE = True
-except ImportError:
+except Exception as e:
+    logger.warning(f"Spacy import failed: {e}. Geolocation might be limited.")
     SPACY_AVAILABLE = False
     
 from backend.operators.storage import storage_operator
@@ -29,7 +32,7 @@ from backend.operators.intelligence.narrative_analyst import narrative_analyst
 from news_crawlers.items import CandidateSourceItem, SourceUpdateItem
 from scrapy.exceptions import DropItem
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__) # Moved up
 
 class EthicalFirewallPipeline:
     """
