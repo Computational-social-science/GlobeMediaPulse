@@ -8,7 +8,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.core.config import settings
-from backend.core.models import MediaSource, MediaTier
+from backend.core.models import MediaSource
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
