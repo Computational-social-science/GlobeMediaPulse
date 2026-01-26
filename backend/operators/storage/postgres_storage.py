@@ -1,5 +1,6 @@
 import logging
 import json
+import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from backend.core.database import db_manager
@@ -29,7 +30,63 @@ class PostgresStorageOperator:
     """
     
     def __init__(self):
-        self.countries_map = {} 
+        self.countries_map = {}
+        self._load_countries_map()
+
+    def _load_countries_map(self):
+        self.countries_map = {}
+        data_path = os.path.join("data", "countries_data.json")
+        geojson_path = os.path.join("backend", "data", "countries.geo.json")
+        if os.path.exists(data_path):
+            try:
+                with open(data_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                countries = data.get("COUNTRIES") if isinstance(data, dict) else data
+                if isinstance(countries, list):
+                    for c in countries:
+                        code = c.get("code")
+                        name = c.get("name")
+                        lat = c.get("lat")
+                        lng = c.get("lng")
+                        region = c.get("region") or "Unknown"
+                        if not code or not name or lat is None or lng is None:
+                            continue
+                        entry = {
+                            "code": code,
+                            "name": name,
+                            "lat": float(lat),
+                            "lng": float(lng),
+                            "region": region
+                        }
+                        self.countries_map[name] = entry
+                        official_name = c.get("official_name")
+                        if official_name and official_name != name:
+                            self.countries_map[official_name] = entry
+                return
+            except Exception as e:
+                logger.error(f"Failed to load countries_data.json: {e}")
+        if os.path.exists(geojson_path):
+            try:
+                with open(geojson_path, "r", encoding="utf-8") as f:
+                    geo_data = json.load(f)
+                for feature in geo_data.get("features", []):
+                    code = feature.get("id")
+                    props = feature.get("properties", {})
+                    name = props.get("name")
+                    lat = props.get("lat")
+                    lng = props.get("lng")
+                    region = props.get("region") or "Unknown"
+                    if not code or not name or lat is None or lng is None:
+                        continue
+                    self.countries_map[name] = {
+                        "code": code,
+                        "name": name,
+                        "lat": float(lat),
+                        "lng": float(lng),
+                        "region": region
+                    }
+            except Exception as e:
+                logger.error(f"Failed to load countries.geo.json: {e}")
 
     def get_connection(self):
         """

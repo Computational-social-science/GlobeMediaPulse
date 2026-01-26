@@ -9,41 +9,46 @@ logger = logging.getLogger(__name__)
 
 class InitPipeline:
     """
-    Initialization Pipeline responsible for setting up the application environment.
-    Handles directory creation and global state initialization.
+    Initialization pipeline for environment bootstrap and shared-state hydration.
+
+    Research motivation: ensure a consistent initialization map
+    $m: \mathcal{C} \rightarrow \mathbb{R}^2$ from country codes to geo-centroids,
+    which stabilizes downstream spatial joins.
     """
     def __init__(self):
         pass
 
     def run(self):
         """
-        Execute the initialization steps.
-        
+        Execute initialization steps.
+
         Steps:
-        1. Create necessary data directories.
-        2. Initialize global shared state (e.g., Country Geo Map).
+        1. Ensure data directories exist.
+        2. Populate shared state for geographic lookup.
         """
         logger.info("Running Initialization Pipeline...")
-        
-        # 1. Directory Setup
         self._ensure_dirs()
-        
-        # 2. Global State Setup
         self._init_global_state()
-        
         logger.info("Initialization complete.")
 
     def _ensure_dirs(self):
-        """Create necessary data directories if they don't exist."""
+        """
+        Create required data directories.
+
+        Ensures $D_{\mathrm{data}}$ exists for downstream persistence.
+        """
         os.makedirs(settings.DATA_DIR, exist_ok=True)
 
     def _init_global_state(self):
-        """Populate global shared state (country_geo_map) from storage."""
-        # Populate country_geo_map from storage
+        """
+        Populate global shared state for geo lookups.
+
+        Builds a mapping for both ISO codes and uppercase names to
+        reduce lookup variance $\mathbb{V}[\hat{g}(c)]$ under noisy inputs.
+        """
         count = 0
         for c_name, data in storage_operator.countries_map.items():
             country_geo_map[data["code"]] = {"lat": data["lat"], "lng": data["lng"], "name": c_name}
-            # Also map uppercase name
             country_geo_map[c_name.upper()] = {"lat": data["lat"], "lng": data["lng"], "name": c_name}
             count += 1
         logger.info(f"Initialized Country Geo Map with {count} entries.")

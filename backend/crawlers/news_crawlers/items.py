@@ -25,8 +25,17 @@ class NewsArticleItem(scrapy.Item):
     language = scrapy.Field()
     country_code = scrapy.Field()
     country_name = scrapy.Field()
+    country_lat = scrapy.Field()
+    country_lng = scrapy.Field()
     country_confidence = scrapy.Field() # 'high' (Seed/Override), 'medium' (GeoJSON), 'low' (TLD), 'unknown'
     
+    # Enriched Intelligence
+    entities = scrapy.Field()
+    narrative_vector = scrapy.Field() # Cross-Lingual Vector
+    sentiment_score = scrapy.Field()  # Narrative Divergence Score
+    safety_label = scrapy.Field()
+    safety_score = scrapy.Field()
+
     # Debugging Data
     raw_html = scrapy.Field()
 
@@ -41,6 +50,12 @@ class CandidateSourceItem(scrapy.Item):
     domain = scrapy.Field()
     found_on = scrapy.Field()
     tier_suggestion = scrapy.Field()
+    
+    # Geolocation Data (for visualization)
+    country_code = scrapy.Field()
+    country_lat = scrapy.Field()
+    country_lng = scrapy.Field()
+    country_confidence = scrapy.Field()
 
 class SourceUpdateItem(scrapy.Item):
     """

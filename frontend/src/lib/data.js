@@ -1,10 +1,5 @@
-/**
- * Static data file generated at build time.
- * Contains country metadata and application constants.
- * 
- * DO NOT EDIT MANUALLY.
- * Source: backend/data/countries.geo.json, backend/data/constants.json
- */
+// This file is generated at build time. DO NOT EDIT MANUALLY.
+// Source: backend/data/countries.geo.json, backend/data/constants.json
 
 export const DATA = {
     "COUNTRIES": [

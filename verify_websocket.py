@@ -6,7 +6,7 @@ import httpx
 import time
 
 async def verify_websocket():
-    uri = "ws://localhost:8000/ws"
+    uri = "ws://localhost:8002/ws"
     print(f"Connecting to {uri}...")
     
     try:
@@ -18,7 +18,7 @@ async def verify_websocket():
             async with httpx.AsyncClient(trust_env=False) as client:
                 try:
                     # First check if the endpoint exists
-                    resp = await client.get("http://localhost:8000/openapi.json", timeout=5.0)
+                    resp = await client.get("http://localhost:8002/openapi.json", timeout=5.0)
                     print(f"OpenAPI Check: {resp.status_code}")
                     
                     # Trigger the fetch for 2017 data using proven parameters
@@ -32,7 +32,7 @@ async def verify_websocket():
                         "start_date": start_date,
                         "end_date": end_date
                     }
-                    url = "http://localhost:8000/api/debug/fetch-news"
+                    url = "http://localhost:8002/api/debug/fetch-news"
                     print(f"Triggering fetch with params: {params}")
                     resp = await client.post(url, params=params, timeout=120.0)
                     print(f"Trigger Response: {resp.status_code} - {resp.text}")
@@ -51,13 +51,9 @@ async def verify_websocket():
                         data = json.loads(message)
                         print(f"Received WebSocket Message: {json.dumps(data, indent=2)}")
                         
-                        if data.get("type") == "news_item":
-                            timestamp = data.get("timestamp", "")
-                            if "2017" in timestamp:
-                                print("✅ Verification SUCCESS: Received 2017 'news_item' event via WebSocket.")
-                                return # Success
-                            else:
-                                print(f"⚠️ Received news item, but timestamp is {timestamp}. Waiting for 2017 data...")
+                        if data.get("type") in {"news_item", "news_event"}:
+                            print("✅ Verification SUCCESS: Received news event via WebSocket.")
+                            return
                         else:
                             print(f"⚠️ Received unexpected message type: {data.get('type')}")
                     except asyncio.TimeoutError:

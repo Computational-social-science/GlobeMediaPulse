@@ -1,18 +1,25 @@
 import { test, expect } from '@playwright/test';
 
-test('has title', async ({ page }) => {
-  await page.goto('https://playwright.dev/');
+const baseUrl = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173/';
 
-  // Expect a title "to contain" a substring.
-  await expect(page).toHaveTitle(/Playwright/);
-});
+test('system monitor controls fits without scroll and logs are scrollable', async ({ page }) => {
+  await page.goto(baseUrl, { waitUntil: 'networkidle' });
 
-test('get started link', async ({ page }) => {
-  await page.goto('https://playwright.dev/');
+  await page.getByTitle('Toggle System Monitor').click();
+  await page.getByRole('button', { name: 'Controls' }).click();
 
-  // Click the get started link.
-  await page.getByRole('link', { name: 'Get started' }).click();
+  const controls = page.getByTestId('system-controls');
+  await expect(controls).toBeVisible();
+  const controlsScroll = await controls.evaluate(el => ({
+    clientHeight: el.clientHeight,
+    scrollHeight: el.scrollHeight
+  }));
+  expect(controlsScroll.scrollHeight).toBeLessThanOrEqual(controlsScroll.clientHeight);
 
-  // Expects page to have a heading with the name of Installation.
-  await expect(page.getByRole('heading', { name: 'Installation' })).toBeVisible();
+  await page.getByRole('button', { name: 'Logs' }).click();
+  const logsContainer = page.getByTestId('system-logs');
+  const logsScroll = page.getByTestId('system-logs-scroll');
+  await expect(logsContainer).toBeVisible();
+  const overflowY = await logsScroll.evaluate(el => getComputedStyle(el).overflowY);
+  expect(overflowY).toBe('auto');
 });

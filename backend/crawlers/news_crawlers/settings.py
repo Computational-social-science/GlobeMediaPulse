@@ -44,7 +44,6 @@ ITEM_PIPELINES = {
    "news_crawlers.pipelines.ClassificationPipeline": 300,
    "news_crawlers.pipelines.EthicalFirewallPipeline": 320,
    "news_crawlers.pipelines.EntityAlignmentPipeline": 360,
-   "news_crawlers.pipelines.NarrativeAnalysisPipeline": 370,
    "news_crawlers.pipelines.PostgresStoragePipeline": 400,
    "news_crawlers.pipelines.RedisPublishPipeline": 410,
 }
@@ -63,7 +62,7 @@ SCHEDULER_PERSIST = True
 
 # Redis Connection
 # Research Motivation: Dynamic configuration for Container vs Local environments.
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380")
 
 # Future-proofing settings
 REQUEST_FINGERPRINTER_IMPLEMENTATION = "2.7"

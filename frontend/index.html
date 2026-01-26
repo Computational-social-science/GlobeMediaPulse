@@ -2,63 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <link rel="preload" as="image" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Globe Media Pulse 2026</title>
-    <!-- Google Fonts: Rajdhani (Tech), Share Tech Mono (Code/Data) -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="preload" as="font" type="font/woff2" crossorigin href="https://fonts.gstatic.com/s/rajdhani/v17/LDIxapCSOBg7S-QT7p4HM-Y.woff2">
-    <link rel="preload" as="font" type="font/woff2" crossorigin href="https://fonts.gstatic.com/s/rajdhani/v17/LDI2apCSOBg7S-QT7pa8FvOreec.woff2">
-    <link rel="preload" as="font" type="font/woff2" crossorigin href="https://fonts.gstatic.com/s/sharetechmono/v16/J7aHnp1uDWRBEqV98dVQztYldFcLowEF.woff2">
-    <!-- Preload Critical Scripts -->
-    <link rel="modulepreload" href="/src/main.js">
-    <!-- Optimized Styles Loading -->
-    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
-    <style>
-      body { margin: 0; background: #000; }
-      #loading-screen {
-        position: fixed; inset: 0; background: #050505; z-index: 9999;
-        display: flex; flex-direction: column; align-items: center; justify-content: center;
-        transition: opacity 0.5s ease-out;
-      }
-      .loader-ring {
-        width: 80px; height: 80px;
-        border: 2px solid rgba(0, 243, 255, 0.1);
-        border-top: 2px solid #00f3ff;
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-        box-shadow: 0 0 30px rgba(0, 243, 255, 0.2);
-      }
-      .loader-text {
-        margin-top: 20px;
-        color: #00f3ff; font-family: monospace; letter-spacing: 4px;
-        text-shadow: 0 0 10px rgba(0, 243, 255, 0.5);
-        animation: pulse 2s infinite;
-      }
-      @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-      @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
-    </style>
+    <title>Globe Media Pulse</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Icons+Round" />
   </head>
   <body>
-    <div id="loading-screen">
-      <div class="loader-ring"></div>
-      <div class="loader-text">INITIALIZING GLOBE MEDIA PULSE...</div>
-    </div>
     <div id="app"></div>
-    <script>
-      window.onload = () => {
-        setTimeout(() => {
-          const screen = document.getElementById('loading-screen');
-          if(screen) {
-            screen.style.opacity = '0';
-            setTimeout(() => screen.remove(), 500);
-          }
-        }, 800); // Slight delay to show off the loader
-      };
-    </script>
-    <script type="module" src="/src/main.js"></script>
+    <script type="module" src="./src/main.js"></script>
   </body>
 </html>

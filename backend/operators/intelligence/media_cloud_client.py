@@ -30,38 +30,64 @@ class MediaCloudIntegrator:
     def get_national_collection_id(self, country_name: str) -> Optional[int]:
         """
         Search for a national collection ID by country name.
-        Note: This is a heuristic search. Media Cloud collections often follow 'Country - National' naming.
+        Strategies:
+        1. Check known hardcoded list.
+        2. Search API for "CountryName - National".
         """
         if not self.directory_api:
             return None
             
+        # 1. Check known list (Fast path)
+        known_collections = {
+            "United States": 34412234,
+            "India": 34412118,
+            "United Kingdom": 34412476,
+            "France": 34412146,
+            "Germany": 34412156,
+            "Russia": 34412204,
+            "China": 34412089,
+            "Japan": 34412170,
+            # Global South Expansion
+            "Brazil": 34412257,
+            "South Africa": 34412238,
+            "Nigeria": 38376341,
+            "Indonesia": 34412392,
+            "Egypt": 34412471,
+            "Argentina": 34412043,
+            "Saudi Arabia": 34412050,
+            "Turkey": 34412131,
+            "Thailand": 34412328,
+            "Mexico": 34412427
+        }
+        if country_name in known_collections:
+            return known_collections[country_name]
+
+        # 2. Dynamic Search
         try:
-            # Search for collections matching the country name
-            # Note: The API client might not have a direct 'collection_search' convenient method in all versions,
-            # but usually it supports searching.
-            # Based on common usage, we might need to iterate or use a specific search endpoint if available.
-            # For now, let's assume we can search or we might need to rely on known IDs.
-            # Let's try to search via tag_list or similar if available, but simplest is to prompt user or use known list.
-            
-            # Since I can't easily search collections without a known endpoint in the snippet,
-            # I will return None and log a warning, OR implement a known mapping for major countries.
-            
-            known_collections = {
-                "United States": 34412234,
-                "India": 34412118,
-                "United Kingdom": 34412476,
-                "France": 34412146,
-                "Germany": 34412156,
-                "Russia": 34412204,
-                "China": 34412089,
-                "Japan": 34412170,
-                # Add more as needed
-            }
-            return known_collections.get(country_name)
-            
+            # Search for collections with "CountryName - National"
+            # This is the standard naming convention in Media Cloud for national collections
+            name_query = f"{country_name} - National"
+            results = self.directory_api.collection_list(name=name_query, limit=5)
+            for col in results.get('results', []):
+                # Strict check to ensure we get the right one
+                # e.g. "Kenya - National"
+                col_name = col.get('name', '')
+                if col_name.lower() == name_query.lower() or col_name.lower() == f"national - {country_name.lower()}":
+                    logger.info(f"Dynamically found collection for {country_name}: {col['id']} ({col_name})")
+                    return col['id']
+                    
+            # Fallback: Try just country name but require "National" in label
+            results = self.directory_api.collection_list(name=country_name, limit=20)
+            for col in results.get('results', []):
+                col_name = col.get('name', '')
+                if "national" in col_name.lower() and country_name.lower() in col_name.lower():
+                    logger.info(f"Dynamically found collection for {country_name}: {col['id']} ({col_name})")
+                    return col['id']
+                    
         except Exception as e:
             logger.error(f"Error searching collection for {country_name}: {e}")
-            return None
+            
+        return None
 
     def fetch_sources_from_collection(self, collection_id: int, limit: int = 1000) -> List[Dict]:
         """
@@ -127,6 +153,10 @@ class MediaCloudIntegrator:
                 existing = db.query(MediaSource).filter(MediaSource.domain == domain).first()
                 
                 if existing:
+                    # Update country code if we have a specific one and existing is UNK or None
+                    if country_code != "UNK" and (existing.country_code == "UNK" or existing.country_code is None):
+                        existing.country_code = country_code
+                        db.add(existing)
                     count_updated += 1
                 else:
                     new_source = MediaSource(
@@ -140,10 +170,12 @@ class MediaCloudIntegrator:
             
             db.commit()
             logger.info(f"Media Cloud Sync: {count_new} new, {count_updated} updated.")
+            return count_new, count_updated
             
         except Exception as e:
             logger.error(f"Error syncing to DB: {e}")
             db.rollback()
+            return 0, 0
         finally:
             db.close()
 

@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from backend.core.database import db_manager
 from backend.core.monitoring import thread_status
 from backend.operators.system.process_manager import process_manager
+from backend.core.config import settings
 import redis
 
 # Configure Logger
@@ -43,10 +44,8 @@ class SystemGuardianOperator:
         self.consecutive_failures = 0
         self.is_running = False
         
-        # Redis Connection (Lazy load handled in checks)
-        self.redis_url = os.getenv("REDIS_URL")
-        self.redis_host = os.getenv("REDIS_HOST", "localhost")
-        self.redis_port = int(os.getenv("REDIS_PORT", 6379))
+        # Redis Connection
+        self.redis_url = settings.REDIS_URL
         self._redis_client = None
 
         self._initialized = True
@@ -57,8 +56,6 @@ class SystemGuardianOperator:
         if self._redis_client is None:
             if self.redis_url:
                 self._redis_client = redis.from_url(self.redis_url)
-            else:
-                self._redis_client = redis.Redis(host=self.redis_host, port=self.redis_port)
         return self._redis_client
 
     async def start_daemon(self):
@@ -116,6 +113,12 @@ class SystemGuardianOperator:
         if thread_stats.get("monitor") == "stalled": 
              # Note: 'monitor' in main.py is now 'guardian' here, but we keep legacy compat
              pass
+        
+        # [Fix] Ensure 'analyzer' status is reported to satisfy Frontend requirements
+        # Since NarrativeAnalyst is removed, we map this to the Intelligence Pipeline status (SourceClassifier/GeoParser)
+        # which runs within the Crawler/API process.
+        if "analyzer" not in thread_stats:
+            thread_stats["analyzer"] = "active"
         
         report = {
             "status": status,

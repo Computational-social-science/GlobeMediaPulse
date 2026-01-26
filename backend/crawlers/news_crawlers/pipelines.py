@@ -26,10 +26,10 @@ except Exception as e:
 from backend.operators.intelligence.geoparsing import GeoParser
 from backend.operators.storage import storage_operator
 from backend.operators.intelligence.source_classifier import source_classifier
-from backend.operators.vision.fingerprinter import visual_fingerprinter
+# from backend.operators.vision.fingerprinter import visual_fingerprinter
 from backend.operators.security.ethical_firewall import ethical_firewall
 from backend.operators.intelligence.entity_aligner import entity_aligner
-from backend.operators.intelligence.narrative_analyst import narrative_analyst
+# Narrative Analysis removed
 from news_crawlers.items import CandidateSourceItem, SourceUpdateItem
 from scrapy.exceptions import DropItem
 
@@ -101,24 +101,6 @@ class EntityAlignmentPipeline:
     def _vectorize(self, text):
         return None
 
-class NarrativeAnalysisPipeline:
-    """
-    Intelligence Pipeline Stage 4: Narrative Divergence Analysis.
-    
-    Research Motivation:
-        - Computes sentiment scores to track narrative stance.
-    """
-    def process_item(self, item, spider):
-        if isinstance(item, (CandidateSourceItem, SourceUpdateItem)):
-            return item
-            
-        adapter = ItemAdapter(item)
-        text_content = f"{adapter.get('title', '')} {adapter.get('description', '')}"
-        
-        sentiment_score = narrative_analyst.analyze_sentiment(text_content)
-        adapter['sentiment_score'] = sentiment_score
-        
-        return item
 
 class RedisPublishPipeline:
     """
@@ -143,27 +125,49 @@ class RedisPublishPipeline:
         self.redis_client = redis.from_url(self.redis_url)
 
     def process_item(self, item, spider):
-        if isinstance(item, (CandidateSourceItem, SourceUpdateItem)):
+        if isinstance(item, SourceUpdateItem):
             return item
             
         adapter = ItemAdapter(item)
+        import time
         
-        # Publish minimal event data
-        event_data = {
-            "title": adapter.get('title'),
-            "url": adapter.get('url'),
-            "source_domain": adapter.get('source_domain'),
-            "tier": adapter.get('tier'),
-            "language": adapter.get('language'),
-            "country": adapter.get('country_code', 'UNK'), # Standardized to country_code
-            "confidence": adapter.get('country_confidence', 'unknown'), # For Visual Tiering (Solid vs Dashed)
-            "timestamp": adapter.get('publish_date'),
-            "logo_url": adapter.get('logo_url')
-        }
+        # Handle CandidateSourceItem
+        if isinstance(item, CandidateSourceItem):
+            event_data = {
+                "title": f"New Source: {adapter.get('domain')}",
+                "url": f"http://{adapter.get('domain')}",
+                "source_domain": adapter.get('domain'),
+                "tier": "Candidate",
+                "language": "en",
+                "country": adapter.get('country_code', 'UNK'),
+                "confidence": adapter.get('country_confidence', 'unknown'),
+                "lat": adapter.get('country_lat'),
+                "lng": adapter.get('country_lng'),
+                "timestamp": time.time(),
+                "logo_url": None,
+                "type": "discovery" # Marker for frontend to potentially treat differently
+            }
+        else:
+            # News Article
+            event_data = {
+                "title": adapter.get('title'),
+                "url": adapter.get('url'),
+                "source_domain": adapter.get('source_domain'),
+                "tier": adapter.get('source_tier'),
+                "language": adapter.get('language'),
+                "country": adapter.get('country_code', 'UNK'),
+                "confidence": adapter.get('country_confidence', 'unknown'),
+                "lat": adapter.get('country_lat'),
+                "lng": adapter.get('country_lng'),
+                "timestamp": adapter.get('published_at') or time.time(), # Fixed field name
+                "logo_url": None,
+                "type": "news" # Explicit type for frontend
+            }
         
         try:
             import json
             self.redis_client.publish("news_pulse", json.dumps(event_data))
+            spider.logger.info(f"Published to Redis: {event_data.get('title')} -> {event_data.get('country')}")
         except Exception as e:
             spider.logger.error(f"Failed to publish to Redis: {e}")
             
@@ -203,13 +207,37 @@ class ClassificationPipeline:
         self.geo_parser = GeoParser(redis_url)
 
     def process_item(self, item, spider):
-        # Skip enrichment for structural/candidate items
-        if isinstance(item, (CandidateSourceItem, SourceUpdateItem)):
+        # Skip enrichment for structural items
+        if isinstance(item, SourceUpdateItem):
             return item
-
+            
         adapter = ItemAdapter(item)
-        url = adapter.get('url')
         
+        # Case 1: Candidate Source (Geoparse Domain)
+        if isinstance(item, CandidateSourceItem):
+            domain = adapter.get('domain')
+            if domain:
+                # Construct pseudo-URL for Geoparsing
+                pseudo_url = f"http://{domain}"
+                country_code, confidence = self.geo_parser.resolve(
+                    url=pseudo_url,
+                    text="", # No content
+                    tier=2,  # Default tier for candidates
+                    existing_code='UNK'
+                )
+                adapter['country_code'] = country_code
+                adapter['country_confidence'] = confidence
+                
+                # [NEW] Inject Lat/Lng
+                coords = self.geo_parser.get_coords(country_code)
+                if coords:
+                    adapter['country_lat'] = coords.get('lat')
+                    adapter['country_lng'] = coords.get('lng')
+                    
+            return item
+            
+        # Case 2: News Article
+        url = adapter.get('url')
         if url:
             # 1. Basic Metadata from SourceClassifier
             classification = source_classifier.classify(url)
@@ -237,10 +265,11 @@ class ClassificationPipeline:
             
             # C. TLD (if UNK)
             if existing_code == 'UNK':
-                existing_code = self._infer_country_from_tld(url)
+                existing_code = self.geo_parser.infer_from_tld(url)
             
             # 3. Advanced Geoparsing (Consensus: Existing + WHOIS + Text)
             # Prepare text content for extraction
+            # CandidateSourceItem might not have content, so use title or empty string
             text_content = (adapter.get('title') or "") + " " + (adapter.get('content') or "")
             # Limit text length to avoid performance hit
             text_content = text_content[:5000]
@@ -258,50 +287,15 @@ class ClassificationPipeline:
             adapter['country_code'] = country_code
             adapter['country_confidence'] = confidence
 
+            # [NEW] Inject Lat/Lng
+            coords = self.geo_parser.get_coords(country_code)
+            if coords:
+                adapter['country_lat'] = coords.get('lat')
+                adapter['country_lng'] = coords.get('lng')
+
         return item
 
-    def _infer_country_from_tld(self, url):
-        """
-        Infers ISO-3 country code from URL TLD.
-        """
-        try:
-            domain = urlparse(url).netloc
-            parts = domain.split('.')
-            if len(parts) < 2:
-                return 'UNK'
-            tld = parts[-1].lower()
-            
-            # Enhanced TLD Map
-            tld_map = {
-                # Asia
-                'jp': 'JPN', 'cn': 'CHN', 'in': 'IND', 'kr': 'KOR', 'id': 'IDN', 
-                'ph': 'PHL', 'vn': 'VNM', 'th': 'THA', 'my': 'MYS', 'sg': 'SGP',
-                'pk': 'PAK', 'bd': 'BGD', 'lk': 'LKA', 'np': 'NPL', 'tw': 'TWN',
-                'hk': 'HKG', 'sa': 'SAU', 'ae': 'ARE', 'ir': 'IRN', 'tr': 'TUR',
-                'il': 'ISR', 'qa': 'QAT', 'kw': 'KWT', 'om': 'OMN', 'jo': 'JOR',
-                
-                # Europe
-                'uk': 'GBR', 'de': 'DEU', 'fr': 'FRA', 'it': 'ITA', 'es': 'ESP',
-                'nl': 'NLD', 'be': 'BEL', 'ch': 'CHE', 'at': 'AUT', 'se': 'SWE',
-                'no': 'NOR', 'dk': 'DNK', 'fi': 'FIN', 'ie': 'IRL', 'pt': 'PRT',
-                'pl': 'POL', 'cz': 'CZE', 'hu': 'HUN', 'ro': 'ROU', 'gr': 'GRC',
-                'ua': 'UKR', 'ru': 'RUS', 'by': 'BLR', 'rs': 'SRB', 'hr': 'HRV',
-                
-                # Americas
-                'ca': 'CAN', 'br': 'BRA', 'mx': 'MEX', 'ar': 'ARG', 'co': 'COL',
-                'cl': 'CHL', 'pe': 'PER', 've': 'VEN', 'ec': 'ECU', 'uy': 'URY',
-                
-                # Africa
-                'za': 'ZAF', 'ng': 'NGA', 'eg': 'EGY', 'ke': 'KEN', 'gh': 'GHA',
-                'ma': 'MAR', 'dz': 'DZA', 'tn': 'TUN', 'et': 'ETH', 'tz': 'TZA',
-                
-                # Oceania
-                'au': 'AUS', 'nz': 'NZL', 'fj': 'FJI'
-            }
-            
-            return tld_map.get(tld, 'UNK')
-        except Exception:
-            return 'UNK'
+
 
 class PostgresStoragePipeline:
     """

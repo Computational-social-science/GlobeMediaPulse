@@ -10,4 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping Backend
-        run: curl -I https://globemediapulse-backend-production.fly.dev/api/stats
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+          url = "https://globe-media-pulse.fly.dev/health/full"
+          with urllib.request.urlopen(url, timeout=20) as response:
+              data = json.load(response)
+          status = str(data.get("status", "")).lower()
+          if status not in {"ok", "degraded"}:
+              raise SystemExit(f"Unhealthy status: {status}")
+          print(f"status={status}")
+          PY

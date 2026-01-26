@@ -74,6 +74,17 @@ def apply_updates():
         except Exception as e:
             print(f"Error adding url_hash to news_articles: {e}")
 
+        # 5. Schema Evolution: Candidate Sources
+        print("Migrating 'candidate_sources' schema...")
+        try:
+            cursor.execute("""
+                ALTER TABLE candidate_sources
+                ADD COLUMN IF NOT EXISTS citation_count INTEGER DEFAULT 0;
+            """)
+            print("Schema update applied successfully.")
+        except Exception as e:
+            print(f"Error migrating candidate_sources: {e}")
+
         conn.close()
         print("Schema Migration Complete.")
         

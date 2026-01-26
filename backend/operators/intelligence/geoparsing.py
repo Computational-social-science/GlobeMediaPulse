@@ -1,14 +1,31 @@
+import sys
 import os
 import logging
 import json
 import redis
+import time
+# Patch for geograpy3 compatibility with newer pylodstorage
+try:
+    import lodstorage.entity # type: ignore
+except ImportError:
+    try:
+        # If lodstorage.entity is missing, try to alias it to lodentity.entity
+        # This fixes the "ModuleNotFoundError: No module named 'lodstorage.entity'"
+        import lodentity.entity # type: ignore
+        import lodstorage # type: ignore
+        lodstorage.entity = lodentity.entity
+        sys.modules['lodstorage.entity'] = lodentity.entity
+    except ImportError:
+        pass
+
 import geograpy
 import whois
 import nltk
 import pycountry
+import functools
 from collections import Counter
 from urllib.parse import urlparse
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Any
 from backend.core.config import settings
 
 # Configure logger
@@ -38,27 +55,68 @@ class GeoParser:
     
     def __init__(self, redis_url: str = settings.REDIS_URL):
         self.redis = redis.from_url(redis_url)
-        self.country_map = self._load_country_map()
+        self.country_map, self.country_coords = self._load_country_data()
         
-    def _load_country_map(self) -> Dict[str, str]:
-        """Loads country name to ISO-3 code mapping from GeoJSON."""
+    def _load_country_data(self) -> Tuple[Dict[str, str], Dict[str, Dict[str, float]]]:
+        """
+        Loads country data:
+        1. Name -> ISO-3 Code mapping
+        2. ISO-3 Code -> {lat, lng} mapping
+        Primary Source: data/countries_data.json
+        """
         mapping = {}
-        geo_path = os.path.join(settings.DATA_DIR, 'countries.geo.json')
-        if os.path.exists(geo_path):
+        coords = {}
+        # Correct path to the root data directory
+        json_path = os.path.join(settings.BASE_DIR, 'data', 'countries_data.json')
+        
+        if os.path.exists(json_path):
             try:
-                with open(geo_path, 'r', encoding='utf-8') as f:
+                with open(json_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    for feature in data.get('features', []):
-                        props = feature.get('properties', {})
-                        code = feature.get('id')
-                        name = props.get('name')
-                        if code and name:
-                            mapping[name.lower()] = code
-                            for alias in props.get('aliases', []):
-                                mapping[alias.lower()] = code
+                    countries = []
+                    if isinstance(data, dict) and "COUNTRIES" in data:
+                        countries = data["COUNTRIES"]
+                    elif isinstance(data, list):
+                        countries = data
+                        
+                    for c in countries:
+                        code = c.get('code') # ISO-3
+                        name = c.get('name')
+                        official_name = c.get('official_name')
+                        lat = c.get('lat')
+                        lng = c.get('lng')
+                        
+                        if code:
+                            # Populate coords
+                            if lat is not None and lng is not None:
+                                coords[code] = {'lat': float(lat), 'lng': float(lng)}
+
+                            # Populate name mapping
+                            if name:
+                                mapping[name.lower()] = code
+                            if official_name:
+                                mapping[official_name.lower()] = code
+                                
+                            # Add aliases or alternate names if available in the future
+                            # Currently utilizing name and official_name
+                            
+                            # Also map alpha2 if unique
+                            if c.get('code_alpha2'):
+                                mapping[c.get('code_alpha2').lower()] = code
+                            
+                            # Map native names if available (for future expansion)
+                            # e.g., "Deutschland" -> DEU
+                            
             except Exception as e:
-                logger.error(f"Failed to load GeoJSON map: {e}")
-        return mapping
+                logger.error(f"Failed to load countries_data.json: {e}")
+        else:
+            logger.warning(f"countries_data.json not found at {json_path}")
+            
+        return mapping, coords
+
+    def get_coords(self, country_code: str) -> Optional[Dict[str, float]]:
+        """Returns {lat, lng} for a given ISO-3 country code."""
+        return self.country_coords.get(country_code)
 
     def get_cached_location(self, domain: str) -> Optional[str]:
         """Retrieves cached country code for a domain."""
@@ -81,6 +139,7 @@ class GeoParser:
         except Exception as e:
             logger.error(f"Redis set error: {e}")
 
+    @functools.lru_cache(maxsize=1024)
     def extract_from_whois(self, domain: str) -> Optional[str]:
         """Extracts country from WHOIS data."""
         try:
@@ -100,6 +159,9 @@ class GeoParser:
         Uses Geograpy3 to extract country and context.
         Returns (Best Country Name, List of Countries Found)
         """
+        if not text or not text.strip():
+            return None, []
+
         try:
             places = geograpy.get_geoPlace_context(text=text)
             if places.countries:
@@ -111,6 +173,7 @@ class GeoParser:
             logger.error(f"Geograpy3 extraction failed: {e}")
         return None, []
 
+    @functools.lru_cache(maxsize=1024)
     def validate_with_mediacloud(self, url: str) -> Optional[str]:
         """Queries Media Cloud for authoritative location verification."""
         try:
@@ -123,6 +186,50 @@ class GeoParser:
             logger.warning(f"Media Cloud verification failed: {e}")
             return None
 
+    def infer_from_tld(self, url: str) -> str:
+        """
+        Infers ISO-3 country code from URL TLD.
+        """
+        try:
+            domain = urlparse(url).netloc
+            parts = domain.split('.')
+            if len(parts) < 2:
+                return 'UNK'
+            tld = parts[-1].lower()
+            
+            # Enhanced TLD Map
+            tld_map = {
+                # Asia
+                'jp': 'JPN', 'cn': 'CHN', 'in': 'IND', 'kr': 'KOR', 'id': 'IDN', 
+                'ph': 'PHL', 'vn': 'VNM', 'th': 'THA', 'my': 'MYS', 'sg': 'SGP',
+                'pk': 'PAK', 'bd': 'BGD', 'lk': 'LKA', 'np': 'NPL', 'tw': 'TWN',
+                'hk': 'HKG', 'sa': 'SAU', 'ae': 'ARE', 'ir': 'IRN', 'tr': 'TUR',
+                'il': 'ISR', 'qa': 'QAT', 'kw': 'KWT', 'om': 'OMN', 'jo': 'JOR',
+                
+                # Europe
+                'uk': 'GBR', 'de': 'DEU', 'fr': 'FRA', 'it': 'ITA', 'es': 'ESP',
+                'nl': 'NLD', 'be': 'BEL', 'ch': 'CHE', 'at': 'AUT', 'se': 'SWE',
+                'no': 'NOR', 'dk': 'DNK', 'fi': 'FIN', 'ie': 'IRL', 'pt': 'PRT',
+                'pl': 'POL', 'cz': 'CZE', 'hu': 'HUN', 'ro': 'ROU', 'gr': 'GRC',
+                'ua': 'UKR', 'ru': 'RUS', 'by': 'BLR', 'rs': 'SRB', 'hr': 'HRV',
+                
+                # Americas
+                'ca': 'CAN', 'br': 'BRA', 'mx': 'MEX', 'ar': 'ARG', 'co': 'COL',
+                'cl': 'CHL', 'pe': 'PER', 've': 'VEN', 'ec': 'ECU', 'uy': 'URY',
+                
+                # Africa
+                'za': 'ZAF', 'eg': 'EGY', 'ng': 'NGA', 'ke': 'KEN', 'gh': 'GHA',
+                'ma': 'MAR', 'dz': 'DZA', 'tn': 'TUN', 'et': 'ETH', 'tz': 'TZA',
+                
+                # Oceania
+                'au': 'AUS', 'nz': 'NZL', 'fj': 'FJI', 'pg': 'PNG'
+            }
+            
+            return tld_map.get(tld, 'UNK')
+        except Exception as e:
+            logger.error(f"TLD inference failed: {e}")
+            return 'UNK'
+
     def resolve(self, url: str, text: str, tier: int = 2, existing_code: str = 'UNK') -> Tuple[str, str]:
         """
         Resolves country code using multi-source consensus.
@@ -130,18 +237,31 @@ class GeoParser:
         """
         domain = urlparse(url).netloc
         
+        # Publish "Start" Event
+        self._publish_event("geoparsing_start", {"domain": domain, "tier": tier})
+        
         # 1. Check Cache
         cached = self.get_cached_location(domain)
         if cached:
+            self._publish_event("geoparsing_complete", {"domain": domain, "result": cached, "method": "cache"})
             return cached, 'high'
 
         candidates = []
+        logs = []
         
         # 2. Existing (TLD/Override)
+        # If UNK, try to infer from TLD locally to be robust
+        if existing_code == 'UNK':
+            existing_code = self.infer_from_tld(url)
+
         if existing_code and existing_code != 'UNK':
             candidates.append(existing_code) # Weight: 1
+            msg = f"TLD/Override Match: {existing_code}"
+            logs.append(msg)
+            self._publish_event("geoparsing_step", {"domain": domain, "step": "TLD", "message": msg})
 
         # 3. WHOIS
+        self._publish_event("geoparsing_step", {"domain": domain, "step": "WHOIS", "message": "Querying WHOIS database..."})
         whois_country = self.extract_from_whois(domain)
         if whois_country:
             # WHOIS usually returns ISO-2, need ISO-3 if possible. 
@@ -150,6 +270,9 @@ class GeoParser:
                 c = pycountry.countries.get(alpha_2=whois_country)
                 if c:
                     candidates.append(c.alpha_3)
+                    msg = f"WHOIS Match: {c.alpha_3}"
+                    logs.append(msg)
+                    self._publish_event("geoparsing_step", {"domain": domain, "step": "WHOIS", "message": msg})
             except:
                 pass
 
@@ -158,14 +281,40 @@ class GeoParser:
         if mc_country:
              candidates.append(mc_country)
              candidates.append(mc_country) # Double weight for authority
+             msg = f"MediaCloud Authority Match: {mc_country} (x2)"
+             logs.append(msg)
+             self._publish_event("geoparsing_step", {"domain": domain, "step": "MediaCloud", "message": msg})
 
         # 5. Text Extraction (Geograpy3)
         geo_name, all_geo_countries = self.extract_from_text(text[:5000]) # Limit text size
-        if geo_name and geo_name.lower() in self.country_map:
-            candidates.append(self.country_map[geo_name.lower()])
+        if geo_name:
+            code = None
+            # Try internal mapping
+            if geo_name.lower() in self.country_map:
+                code = self.country_map[geo_name.lower()]
             
+            # Fallback: Try Pycountry direct lookup if mapping failed
+            if not code:
+                try:
+                    import pycountry
+                    c = pycountry.countries.lookup(geo_name)
+                    if c:
+                        code = c.alpha_3
+                except:
+                    pass
+
+            if code:
+                candidates.append(code)
+                msg = f"Geograpy3 Text Analysis: {code}"
+                logs.append(msg)
+                self._publish_event("geoparsing_step", {"domain": domain, "step": "NLP", "message": msg})
+            else:
+                 self._publish_event("geoparsing_step", {"domain": domain, "step": "NLP", "message": f"Found '{geo_name}' but could not map to ISO-3"})
+
         # 6. Conflict Resolution (Majority Consensus)
         if not candidates:
+            logger.warning(f"Geoparsing FAILED for {domain}. Candidates empty. Logs: {logs}")
+            self._publish_event("geoparsing_failed", {"domain": domain})
             return 'UNK', 'unknown'
             
         counts = Counter(candidates)
@@ -180,11 +329,31 @@ class GeoParser:
         elif len(candidates) == 1:
             confidence = 'medium'
             
-        # Hierarchy Validation (Bonus: if Geograpy found regions matching the winner)
-        # (This is implicit if Geograpy returns the country based on regions)
-        
         # Cache result if valid
         if winner != 'UNK':
             self.cache_location(domain, winner, tier)
+        
+        # Publish "Complete" Event with details
+        self._publish_event("geoparsing_complete", {
+            "domain": domain, 
+            "result": winner, 
+            "confidence": confidence,
+            "details": "; ".join(logs)
+        })
             
         return winner, confidence
+
+    def _publish_event(self, event_type: str, data: Dict[str, Any]):
+        """Publishes real-time events to Redis for frontend visualization."""
+        try:
+            payload = {
+                "type": "log", 
+                "sub_type": event_type,
+                "timestamp": time.time(),
+                "data": data
+            }
+            # Use 'news_pulse' channel so existing listener picks it up
+            self.redis.publish("news_pulse", json.dumps(payload))
+        except Exception as e:
+            logger.debug(f"Redis publish failed: {e}")
+

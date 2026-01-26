@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def push_seeds():
     # 1. Connect to Redis
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    redis_url = settings.REDIS_URL
     
     try:
         r = redis.from_url(redis_url)

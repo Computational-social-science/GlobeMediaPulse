@@ -2,8 +2,8 @@ import requests
 import time
 import sys
 
-BASE_URL = "http://localhost:8000/api"
-FRONTEND_URL = "http://localhost:5173"
+BASE_URL = "http://localhost:8002/api"
+FRONTEND_URL = "http://localhost:5174"
 
 def log(msg, status="INFO"):
     print(f"[{status}] {msg}")
@@ -44,7 +44,7 @@ def run_verification():
         sys.exit(1)
     
     # 3. Stats Check
-    success, stats = test_endpoint(f"{BASE_URL}/stats", "Global Stats")
+    success, stats = test_endpoint(f"{BASE_URL}/map-data", "Global Stats")
     if success:
         log(f"Stats received: {stats}", "INFO")
 
@@ -61,20 +61,10 @@ def run_verification():
     except Exception as e:
         log(f"Pipeline Trigger: EXCEPTION ({e})", "ERROR")
 
-    # 5. Verify Data Storage (Get Recent Errors)
-    # Give it a second if async, but the trigger endpoint seems to wait for run()
-    success, errors = test_endpoint(f"{BASE_URL}/errors?limit=5", "Recent Errors Verification")
+    # 5. Verify Heatmap Data
+    success, heatmap = test_endpoint(f"{BASE_URL}/stats/heatmap", "Heatmap Data Verification")
     if success:
-        log(f"Retrieved {len(errors)} errors.", "INFO")
-        if len(errors) > 0:
-            log("Sample Error: " + str(errors[0].get('word', 'N/A')), "INFO")
-        else:
-            log("No errors found yet (Pipeline might not have found typos or just started).", "WARNING")
-
-    # 6. Verify Heatmap Data
-    success, heatmap = test_endpoint(f"{BASE_URL}/events/heatmap", "Heatmap Data Verification")
-    if success:
-         log(f"Retrieved {len(heatmap)} heatmap points.", "INFO")
+        log(f"Retrieved {len(heatmap)} heatmap points.", "INFO")
 
     log("Verification Complete.", "INFO")
 

@@ -49,7 +49,7 @@ def log(status, message):
 
 def check_port(host, port, service_name):
     # Try HTTP check first for web ports
-    if port in [8002, 5174]:
+    if port in [8002, 5173, 5174]:
         import urllib.request
         try:
             url = f"http://{host}:{port}/"
@@ -100,7 +100,7 @@ def check_python_dependencies():
             if not line or line.startswith("#"):
                 continue
             # Basic parsing for package name (ignoring versions for simple check)
-            pkg = line.split("==")[0].split(">=")[0].split("[")[0]
+            pkg = line.split("@")[0].split("==")[0].split(">=")[0].split("[")[0].strip()
             if not importlib.util.find_spec(pkg.replace("-", "_")): # handle some replacements like python-dotenv -> dotenv? No, usually names match or close enough
                 # Try specific mappings
                 if pkg == "python-dotenv": pkg_import = "dotenv"
@@ -109,6 +109,11 @@ def check_python_dependencies():
                 elif pkg == "scikit-learn": pkg_import = "sklearn"
                 elif pkg == "playwright-stealth": pkg_import = "playwright_stealth"
                 elif pkg == "newspaper3k": pkg_import = "newspaper"
+                elif pkg == "newspaper4k": pkg_import = "newspaper"
+                elif pkg == "beautifulsoup4": pkg_import = "bs4"
+                elif pkg == "python-whois": pkg_import = "whois"
+                elif pkg == "PyMySQL": pkg_import = "pymysql"
+                elif pkg == "geograpy3": pkg_import = "geograpy"
                 else: pkg_import = pkg.replace("-", "_")
                 
                 if not importlib.util.find_spec(pkg_import):
@@ -209,7 +214,7 @@ def main():
     print_progress(current_step, total_steps, prefix='Progress:', suffix='Backend Checked', length=30)
     
     # Check if frontend is running
-    frontend_up = check_port("localhost", 5174, "Frontend Dev Server")
+    frontend_up = check_port("localhost", 5173, "Frontend Dev Server")
     current_step += 1
     print_progress(current_step, total_steps, prefix='Progress:', suffix='Frontend Checked', length=30)
     time.sleep(0.5)

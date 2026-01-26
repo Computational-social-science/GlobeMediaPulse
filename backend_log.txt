@@ -1,8 +1,0 @@
-[Storage Policy] DETECTED LOCAL DATABASE
-[Storage Policy] -> Saving ALL data (full articles, errors, skipped events).
-Connecting to PostgreSQL database at db:5432/spellatlas
-PostgreSQL Connection Pool initialized.
-[Storage Policy] DETECTED LOCAL DATABASE
-[Storage Policy] -> Saving ALL data (full articles, errors, skipped events).
-Connecting to PostgreSQL database at db:5432/spellatlas
-PostgreSQL Connection Pool initialized.

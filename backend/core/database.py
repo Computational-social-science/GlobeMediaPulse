@@ -155,5 +155,12 @@ class DatabaseManager:
             if conn:
                 pool.putconn(conn)
 
+    def get_db(self):
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
 # Global Instance
 db_manager = DatabaseManager()

@@ -1,20 +1,15 @@
 import asyncio
 import logging
-import sys
-import os
+import json
 from contextlib import asynccontextmanager
 from typing import Dict, Any
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-import redis.asyncio as redis # Use async redis for the listener
-
-# Add project root to path to allow absolute imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import redis.asyncio as redis
 
 from backend.core.database import db_manager
 from backend.api.endpoints import router as api_router
-from backend.api.system import router as system_router
 from backend.core.shared_state import ws_manager
 from backend.pipelines.init_pipeline import init_pipeline
 from backend.scripts.cleanup_resources import cleanup_temp_resources
@@ -36,6 +31,10 @@ logging.getLogger().addHandler(ws_log_handler)
 async def lifespan(app: FastAPI):
     """
     Lifecycle manager for the FastAPI application.
+
+    The lifecycle enforces global orchestration with explicit supervision
+    $\mathcal{G}=\{\text{init},\text{monitor},\text{heal}\}$ to minimize
+    cascading failures $P_f$ under concurrent workloads.
     """
     # Startup Phase
     logger.info("Starting Globe Media Pulse Backend System...")
@@ -71,6 +70,9 @@ async def periodic_cleanup_task():
     """
     Background Daemon: Periodic Resource Cleanup.
     Runs every 2 hours (7200 seconds).
+
+    Cleanup cadence follows $\Delta t=7200$ s to cap resource drift
+    and keep disk usage under the threshold $\Omega$.
     """
     CLEANUP_INTERVAL = 7200 # 2 hours
     logger.info("Periodic Resource Cleanup Daemon Started.")
@@ -89,16 +91,15 @@ async def periodic_cleanup_task():
 async def redis_event_listener():
     """
     Background Task: Listens to Redis 'news_pulse' channel and broadcasts to WebSockets.
+
+    This task is the data-flow bridge $B:\text{Redis}\rightarrow\text{WebSocket}$
+    that preserves event order to reduce temporal skew $\delta t$.
     """
-    redis_url = os.getenv("REDIS_URL")
-    host = os.getenv("REDIS_HOST", "localhost")
-    port = int(os.getenv("REDIS_PORT", 6379))
+    from backend.core.config import settings
+    redis_url = settings.REDIS_URL
     
     try:
-        if redis_url:
-            r = redis.from_url(redis_url)
-        else:
-            r = redis.Redis(host=host, port=port)
+        r = redis.from_url(redis_url)
             
         async with r.pubsub() as pubsub:
             await pubsub.subscribe("news_pulse")
@@ -108,12 +109,27 @@ async def redis_event_listener():
                 message = await pubsub.get_message(ignore_subscribe_messages=True)
                 if message:
                     try:
-                        data = message["data"].decode("utf-8")
-                        # Broadcast to all connected clients
-                        await ws_manager.broadcast({
-                            "type": "news_event",
-                            "payload": data 
-                        })
+                        data_str = message["data"].decode("utf-8")
+                        try:
+                            payload = json.loads(data_str)
+                            # Smart Routing based on payload 'type'
+                            if isinstance(payload, dict) and payload.get("type") == "log":
+                                await ws_manager.broadcast({
+                                    "type": "log_entry",
+                                    "payload": payload
+                                })
+                            else:
+                                # Default to news_event
+                                await ws_manager.broadcast({
+                                    "type": "news_event",
+                                    "payload": payload
+                                })
+                        except json.JSONDecodeError:
+                            # If not JSON, send as raw text payload
+                            await ws_manager.broadcast({
+                                "type": "news_event",
+                                "payload": data_str
+                            })
                     except Exception as e:
                         logger.error(f"Error broadcasting redis event: {e}")
                 
@@ -121,34 +137,25 @@ async def redis_event_listener():
     except Exception as e:
         logger.error(f"Redis Event Listener Failed: {e}")
 
-app = FastAPI(lifespan=lifespan, title="Globe Media Pulse API")
+app = FastAPI(title="Globe Media Pulse API", lifespan=lifespan)
 
 # CORS Configuration
-allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
-origins = [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://localhost:3000",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",
-    "https://computational-social-science.github.io"
-]
-if allowed_origins_env:
-    origins.extend([origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()])
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"], # Allow all origins for dev
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(api_router, prefix="/api")
-app.include_router(system_router, prefix="/api/system", tags=["System"])
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket ingress for streaming updates with bounded reconnect delay
+    $\Delta t=5\text{s}$ configured client-side.
+    """
     await ws_manager.connect(websocket)
     try:
         while True:
@@ -158,10 +165,16 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/health/full")
 async def health_full(autoheal: bool = False) -> Dict[str, Any]:
+    """
+    Global health endpoint with optional autoheal action $a\in\{0,1\}$.
+    """
     return await system_guardian.check_health(autoheal=autoheal)
 
 @app.post("/health/autoheal")
 async def autoheal() -> Dict[str, Any]:
+    """
+    Trigger autohealing to restore system stability and reduce $P_f$.
+    """
     report = await system_guardian.auto_heal()
     status = await system_guardian.check_health(autoheal=False)
     status["self_heal"] = report
@@ -169,6 +182,9 @@ async def autoheal() -> Dict[str, Any]:
 
 @app.get("/")
 def read_root() -> Dict[str, str]:
+    """
+    Root endpoint for fast liveness probes $t \rightarrow 0$.
+    """
     return {
         "status": "online",
         "system": "Globe Media Pulse V1.0"

@@ -43,8 +43,8 @@ export const timelineData = writable([]); // Historical data snapshots for the t
  * @type {import('svelte/store').Writable<Record<string, any>>} 
  */
 export const windowState = writable({
-    brain: { visible: true, minimized: false, maximized: false, position: { x: 20, y: 100 } },
-    systemMonitor: { visible: false, minimized: false, maximized: false, position: { x: 100, y: 100 } }
+    systemMonitor: { visible: true, minimized: false, maximized: false, position: { x: 100, y: 100 } },
+    brain: { visible: false, minimized: false, maximized: false, position: { x: 680, y: 120 } }
 });
 
 export const latestNewsItem = writable(null); // The most recently processed news item, used to trigger reactive updates

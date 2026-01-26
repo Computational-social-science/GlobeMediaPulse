@@ -8,7 +8,7 @@ from news_crawlers.items import NewsArticleItem, CandidateSourceItem, SourceUpda
 import trafilatura
 from trafilatura.feeds import find_feed_urls
 from urllib.parse import urlparse
-from backend.utils.simhash import compute_structural_simhash
+from backend.utils.simhash import compute_structural_simhash, is_similar
 
 class UniversalNewsSpider(RedisSpider):
     """
@@ -68,13 +68,32 @@ class UniversalNewsSpider(RedisSpider):
         # copyright_text = visual_fingerprinter.extract_copyright(response.text)
         copyright_text = None
             
-        # Yield Source Update Item (for metadata persistence)
-        update_item = SourceUpdateItem()
-        update_item['domain'] = current_domain
-        update_item['logo_url'] = logo_url
-        update_item['copyright_text'] = copyright_text
-        update_item['structure_simhash'] = simhash
-        yield update_item
+        # Check if structure has changed before updating (Incremental Update Strategy)
+        should_update = True
+        if current_domain in self.seeds:
+            cached_source = self.seeds[current_domain]
+            # If we have a stored SimHash and it is similar to the new one, skip update
+            # hasattr check for safety if model definition varies
+            if hasattr(cached_source, 'structure_simhash') and cached_source.structure_simhash:
+                if is_similar(simhash, cached_source.structure_simhash):
+                    should_update = False
+                    self.logger.debug(f"Structure SimHash unchanged for {current_domain}. Skipping metadata update.")
+
+        if should_update:
+            # Yield Source Update Item (for metadata persistence)
+            update_item = SourceUpdateItem()
+            update_item['domain'] = current_domain
+            update_item['logo_url'] = logo_url
+            update_item['copyright_text'] = copyright_text
+            update_item['structure_simhash'] = simhash
+            yield update_item
+        else:
+             # Research Motivation: Bandwidth & Compute Optimization
+             # If structure (SimHash) matches the previous crawl, it implies the homepage layout AND content links
+             # (which are part of the SimHash features) haven't significantly changed.
+             # Thus, we can safely skip crawling deep links to avoid redundant processing of old news.
+             self.logger.info(f"SimHash match for {current_domain}. Skipping deep crawling.")
+             return
 
         # Extract all hyperlinks for traversal
         links = response.css('a::attr(href)').getall()
