@@ -50,7 +50,9 @@ symspellpy>=6.7.0
 pycountry>=22.3.5
 geopy>=2.4.0
 geograpy3 @ git+https://github.com/somnathrakshit/geograpy3.git
-python-whois>=0.8.0
+python-whois
+mediacloud>=0.8.0
+pycountry
 
 # ==========================================
 # ML & Analysis (Transformers/Torch)

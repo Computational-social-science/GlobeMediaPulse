@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # Feature Flags
     ENABLE_REAL_DATA: bool = True
     
+    # Media Cloud Integration
+    MEDIA_CLOUD_API_KEY: str = os.getenv("MEDIA_CLOUD_API_KEY", "")
+    
     model_config = SettingsConfigDict(case_sensitive=True)
 
 settings = Settings()

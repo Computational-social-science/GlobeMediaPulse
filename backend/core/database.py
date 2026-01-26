@@ -9,10 +9,23 @@ try:
 except ImportError:
     psycopg2 = None
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from backend.core.config import settings
 from backend.utils.circuit_breaker import postgres_breaker
 
 logger = logging.getLogger(__name__)
+
+# SQLAlchemy Setup for ORM usage
+def get_db_url():
+    url = settings.DATABASE_URL
+    if url and url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    return url
+
+engine = create_engine(get_db_url())
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 class DatabaseManager:
     """

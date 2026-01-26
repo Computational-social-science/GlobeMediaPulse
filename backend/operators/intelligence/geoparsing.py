@@ -5,6 +5,7 @@ import redis
 import geograpy
 import whois
 import nltk
+import pycountry
 from collections import Counter
 from urllib.parse import urlparse
 from typing import Optional, List, Dict, Tuple
@@ -31,14 +32,14 @@ except LookupError:
 
 class GeoParser:
     """
-    Advanced Geoparsing Operator using Geograpy3, WHOIS, and caching.
+    Advanced Geoparsing Operator using Geograpy3, WHOIS, MediaCloud, and caching.
     Implements Conflict Resolution and Hierarchy Validation.
     """
     
     def __init__(self, redis_url: str = settings.REDIS_URL):
         self.redis = redis.from_url(redis_url)
         self.country_map = self._load_country_map()
-
+        
     def _load_country_map(self) -> Dict[str, str]:
         """Loads country name to ISO-3 code mapping from GeoJSON."""
         mapping = {}
@@ -110,6 +111,18 @@ class GeoParser:
             logger.error(f"Geograpy3 extraction failed: {e}")
         return None, []
 
+    def validate_with_mediacloud(self, url: str) -> Optional[str]:
+        """Queries Media Cloud for authoritative location verification."""
+        try:
+            from backend.operators.intelligence.media_cloud_client import MediaCloudIntegrator
+            integrator = MediaCloudIntegrator()
+            if not integrator.directory_api:
+                return None
+            return integrator.verify_source_location(url)
+        except Exception as e:
+            logger.warning(f"Media Cloud verification failed: {e}")
+            return None
+
     def resolve(self, url: str, text: str, tier: int = 2, existing_code: str = 'UNK') -> Tuple[str, str]:
         """
         Resolves country code using multi-source consensus.
@@ -132,11 +145,6 @@ class GeoParser:
         whois_country = self.extract_from_whois(domain)
         if whois_country:
             # WHOIS usually returns ISO-2, need ISO-3 if possible. 
-            # For now, let's assume we can map it or it's a code. 
-            # Our system uses ISO-3 (JPN, USA). WHOIS gives 'US', 'JP'.
-            # I need a 2-to-3 mapper. pycountry can help, or simple heuristic.
-            # Let's rely on internal mapping if possible or just use it as a vote if it matches 3-letter.
-            # Actually, `pycountry` is in requirements. 
             import pycountry
             try:
                 c = pycountry.countries.get(alpha_2=whois_country)
@@ -145,12 +153,18 @@ class GeoParser:
             except:
                 pass
 
-        # 4. Text Extraction (Geograpy3)
+        # 4. Media Cloud Verification (Authoritative)
+        mc_country = self.validate_with_mediacloud(url)
+        if mc_country:
+             candidates.append(mc_country)
+             candidates.append(mc_country) # Double weight for authority
+
+        # 5. Text Extraction (Geograpy3)
         geo_name, all_geo_countries = self.extract_from_text(text[:5000]) # Limit text size
         if geo_name and geo_name.lower() in self.country_map:
             candidates.append(self.country_map[geo_name.lower()])
             
-        # 5. Conflict Resolution (Majority Consensus)
+        # 6. Conflict Resolution (Majority Consensus)
         if not candidates:
             return 'UNK', 'unknown'
             
@@ -161,7 +175,7 @@ class GeoParser:
         
         # Confidence Logic
         confidence = 'low'
-        if count > 1:
+        if count > 1 or mc_country == winner:
             confidence = 'high'
         elif len(candidates) == 1:
             confidence = 'medium'
