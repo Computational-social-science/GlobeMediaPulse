@@ -25,8 +25,8 @@ class MediaSource(BaseModel):
     name: str
     domain: str
     tier: MediaTier
-    country: str
-    language: str
+    country: Optional[str] = None
+    language: Optional[str] = None
     tags: List[str] = []
 
 class MediaLibrary(BaseModel):
