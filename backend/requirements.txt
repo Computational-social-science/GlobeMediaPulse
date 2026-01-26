@@ -52,6 +52,11 @@ geopy>=2.4.0
 geograpy3 @ git+https://github.com/somnathrakshit/geograpy3.git
 python-whois
 mediacloud>=0.8.0
+newspaper4k>=0.9.3.1
+scikit-learn
+pandas
+matplotlib
+PyMySQL
 
 # ==========================================
 # Utils
