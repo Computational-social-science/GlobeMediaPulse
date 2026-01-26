@@ -12,7 +12,7 @@ services:
     volumes:
       - globemediapulse_postgres_data:/var/lib/postgresql/data
     ports:
-      - "5433:5432" # Changed to 5433 to avoid conflict with original project
+      - "5433:5432" # Host port 5433 -> Container 5432
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -20,13 +20,13 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis Service (Task Queue + Bloom Filter + RedisInsight)
+  # Redis Service (Task Queue + Bloom Filter)
   redis:
     image: redis/redis-stack:latest
     container_name: globemediapulse-redis
     ports:
-      - "6380:6379" # Changed to 6380
-      - "8003:8001" # Changed to 8003 to avoid conflict with backend on 8002
+      - "6380:6379" # Host 6380 -> Container 6379 (Redis)
+      - "8003:8001" # Host 8003 -> Container 8001 (RedisInsight)
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -39,8 +39,8 @@ services:
     image: minio/minio
     container_name: globemediapulse-minio
     ports:
-      - "9002:9000" # Changed to 9002
-      - "9003:9001" # Changed to 9003
+      - "9002:9000" # API
+      - "9003:9001" # Console
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -59,7 +59,7 @@ services:
     image: browserless/chrome:latest
     container_name: globemediapulse-playwright
     ports:
-      - "3002:3000" # Changed to 3002
+      - "3002:3000" # CDP Port
     environment:
       - CONNECTION_TIMEOUT=60000
       - MAX_CONCURRENT_SESSIONS=10
@@ -74,78 +74,53 @@ services:
   backend:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: backend/Dockerfile.dev
     container_name: globemediapulse-backend
     ports:
       - "8002:8002"
     environment:
-      - PORT=8000
-      - ALLOWED_ORIGINS=http://localhost:5174
-      - DATABASE_URL=postgresql://postgres:password@db:5432/spellatlas
+      - PORT=8002
+      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174
+      - DATABASE_URL=postgresql://postgres:password@db:5432/globemediapulse
       - REDIS_URL=redis://redis:6379/0
       - PLAYWRIGHT_CDP_URL=ws://playwright:3000
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
       - S3_ENDPOINT_URL=http://minio:9000
-      - S3_BUCKET_NAME=spellatlas-local
+      - S3_BUCKET_NAME=globemediapulse-local
       - PYTHONUNBUFFERED=1
     depends_on:
-      - db
-      - redis
-      - playwright
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      playwright:
+        condition: service_started
     volumes:
       # Mount source code for hot reloading
       - ./backend:/app/backend
       - ./data:/app/data
-    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
-    restart: unless-stopped
-    # [UPDATED] Health check probe configuration
-    # Interval increased to 15s to reduce load from frequent checks
-    # This aligns with the "External Monitor Configuration" recommendation
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health/full"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      # Mount NLTK data if needed, or let it download
+      # - ./backend/nltk_data:/usr/local/share/nltk_data
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8002 --reload
 
-  # Frontend Service (Svelte/Vite)
+  # Frontend Service (Vite/Svelte)
   frontend:
     build:
-      context: ./frontend
+      context: frontend
       dockerfile: Dockerfile.dev
     container_name: globemediapulse-frontend
     ports:
-      - "5174:5173"
+      - "5173:5173"
     environment:
       - VITE_API_URL=http://localhost:8002
-      - VITE_WS_URL=ws://localhost:8002
-    depends_on:
-      - backend
     volumes:
-      # Mount source code for hot reloading
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
-      - ./frontend/index.html:/app/index.html
-      - ./frontend/vite.config.js:/app/vite.config.js
-      # Prevent node_modules from being overwritten
-      - /app/node_modules
-    restart: unless-stopped
-
-  # Frontend Production Service (Nginx + Cache)
-  # Run this to test production build locally: docker-compose up frontend-prod
-  frontend-prod:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: globemediapulse-frontend-prod
-    ports:
-      - "8081:80" # Changed to 8081
+      - ./frontend:/app
+      - /app/node_modules # Prevent host node_modules from overwriting container's
     depends_on:
       - backend
-    restart: unless-stopped
+    command: npm run dev -- --host
 
 volumes:
   globemediapulse_postgres_data:
   globemediapulse_minio_data:
-  redis_data:

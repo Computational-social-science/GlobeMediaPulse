@@ -77,6 +77,25 @@ SEED_DATA = [
     {"name": "Guangzhou Daily", "domain": "gzdaily.dayoo.com", "country_name": "China", "country_code": "CHN", "tier": "Tier-1", "type": "Newspaper", "language": "zh"},
     {"name": "Nanfang City News", "domain": "nandu.com", "country_name": "China", "country_code": "CHN", "tier": "Tier-1", "type": "Newspaper", "language": "zh"},
     {"name": "Rajasthan Patrika", "domain": "patrika.com", "country_name": "India", "country_code": "IND", "tier": "Tier-1", "type": "Newspaper", "language": "hi"},
+
+    # --- Additional Global TV & Regional Hubs (2026 Expansion) ---
+    {"name": "Deutsche Welle", "domain": "dw.com", "country_name": "Germany", "country_code": "DEU", "tier": "Tier-1", "type": "Broadcaster", "language": "en"},
+    {"name": "France 24", "domain": "france24.com", "country_name": "France", "country_code": "FRA", "tier": "Tier-1", "type": "Broadcaster", "language": "en"},
+    {"name": "NHK World", "domain": "nhk.or.jp", "country_name": "Japan", "country_code": "JPN", "tier": "Tier-1", "type": "Broadcaster", "language": "en"},
+    {"name": "CNA (Channel News Asia)", "domain": "channelnewsasia.com", "country_name": "Singapore", "country_code": "SGP", "tier": "Tier-1", "type": "Broadcaster", "language": "en"},
+    {"name": "South African Broadcasting Corporation", "domain": "sabcnews.com", "country_name": "South Africa", "country_code": "ZAF", "tier": "Tier-1", "type": "Broadcaster", "language": "en"},
+    {"name": "TRT World", "domain": "trtworld.com", "country_name": "Turkey", "country_code": "TUR", "tier": "Tier-1", "type": "Broadcaster", "language": "en"},
+    {"name": "CGTN", "domain": "cgtn.com", "country_name": "China", "country_code": "CHN", "tier": "Tier-1", "type": "Broadcaster", "language": "en"},
+    {"name": "NDTV", "domain": "ndtv.com", "country_name": "India", "country_code": "IND", "tier": "Tier-1", "type": "Broadcaster", "language": "en"},
+    {"name": "Globo", "domain": "globo.com", "country_name": "Brazil", "country_code": "BRA", "tier": "Tier-1", "type": "Broadcaster", "language": "pt"},
+    {"name": "El Mundo", "domain": "elmundo.es", "country_name": "Spain", "country_code": "ESP", "tier": "Tier-1", "type": "Newspaper", "language": "es"},
+    {"name": "Corriere della Sera", "domain": "corriere.it", "country_name": "Italy", "country_code": "ITA", "tier": "Tier-1", "type": "Newspaper", "language": "it"},
+    {"name": "Le Figaro", "domain": "lefigaro.fr", "country_name": "France", "country_code": "FRA", "tier": "Tier-1", "type": "Newspaper", "language": "fr"},
+    {"name": "Kompas", "domain": "kompas.com", "country_name": "Indonesia", "country_code": "IDN", "tier": "Tier-1", "type": "Newspaper", "language": "id"},
+    {"name": "Bangkok Post", "domain": "bangkokpost.com", "country_name": "Thailand", "country_code": "THA", "tier": "Tier-1", "type": "Newspaper", "language": "en"},
+    {"name": "Dawn", "domain": "dawn.com", "country_name": "Pakistan", "country_code": "PAK", "tier": "Tier-1", "type": "Newspaper", "language": "en"},
+    {"name": "Haaretz", "domain": "haaretz.com", "country_name": "Israel", "country_code": "ISR", "tier": "Tier-1", "type": "Newspaper", "language": "en"},
+    {"name": "Arab News", "domain": "arabnews.com", "country_name": "Saudi Arabia", "country_code": "SAU", "tier": "Tier-1", "type": "Newspaper", "language": "en"},
 ]
 
 def seed_media_sources():

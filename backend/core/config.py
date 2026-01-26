@@ -1,6 +1,6 @@
 
 import os
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """
@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # Default to local Postgres instance if not set
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost:5433/globemediapulse")
     
+    # Redis Configuration
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+    
     # Path Configuration
     # Resolve project root directory dynamically
     BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,7 +25,6 @@ class Settings(BaseSettings):
     # Feature Flags
     ENABLE_REAL_DATA: bool = True
     
-    class Config:
-        case_sensitive = True
+    model_config = SettingsConfigDict(case_sensitive=True)
 
 settings = Settings()

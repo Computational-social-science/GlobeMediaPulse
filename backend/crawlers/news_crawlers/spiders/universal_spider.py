@@ -1,4 +1,6 @@
 import scrapy
+from scrapy_redis.spiders import RedisSpider
+from scrapy_redis.utils import bytes_to_str
 from scrapy.spiders import CrawlSpider, Rule
 from scrapy.linkextractors import LinkExtractor
 from backend.operators.intelligence.source_classifier import source_classifier
@@ -8,7 +10,7 @@ from urllib.parse import urlparse
 from backend.utils.simhash import compute_structural_simhash
 from backend.operators.vision.fingerprinter import visual_fingerprinter
 
-class UniversalNewsSpider(scrapy.Spider):
+class UniversalNewsSpider(RedisSpider):
     """
     Core Scrapy Spider for Global Media Monitoring.
     
@@ -19,28 +21,23 @@ class UniversalNewsSpider(scrapy.Spider):
           and 'Tier-1' (National) sources, it automatically identifies 'Tier-2' (Local) sources via citation analysis.
         - **Structural Fingerprinting**: Computes SimHash of the DOM structure to detect layout changes
           and potentially classify source types (e.g., distinguishing blogs from news portals).
+        - **Distributed Architecture**: Inherits from `RedisSpider` to support distributed, persistent crawling.
     """
     name = "universal_news"
+    redis_key = "universal_news:start_urls"
     
     def __init__(self, *args, **kwargs):
         super(UniversalNewsSpider, self).__init__(*args, **kwargs)
         # Load seeds from the centralized library (Source of Truth)
+        # Used for classification in parse_homepage
         self.seeds = source_classifier.sources
-        self.start_urls = []
-        
-        # Initialize start URLs from verified Tier-0/1 seeds
-        for domain, source in self.seeds.items():
-            # Heuristic: Assume HTTPS for modern media sites
-            url = f"https://{domain}"
-            self.start_urls.append(url)
             
-    def start_requests(self):
+    def make_request_from_data(self, data):
         """
-        Generate initial requests for all seed URLs.
-        Uses Playwright for JavaScript rendering to ensure full DOM access.
+        Overrides RedisSpider method to ensure Playwright is used for all start URLs.
         """
-        for url in self.start_urls:
-            yield scrapy.Request(url, callback=self.parse_homepage, meta={"playwright": True})
+        url = bytes_to_str(data, self.redis_encoding)
+        return scrapy.Request(url, callback=self.parse_homepage, meta={"playwright": True})
 
     def parse_homepage(self, response):
         """

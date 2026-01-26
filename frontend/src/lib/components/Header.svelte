@@ -103,12 +103,12 @@
     </div>
 
     <!-- Right: System Status & Clock -->
-    <div class="flex items-center gap-6">
+    <div class="flex items-center gap-4">
         
         <!-- Total Sources Stats -->
-        <div class="hidden md:flex items-center gap-3 border-r border-white/10 pr-6">
+        <div class="hidden md:flex items-center gap-3 border-r border-white/10 pr-4">
             <div class="flex flex-col items-end">
-                <span class="text-[10px] text-neon-blue/70 font-mono tracking-widest uppercase">DISCOVERED SOURCES</span>
+                <span class="text-[10px] text-neon-blue/70 font-mono tracking-widest uppercase">SOURCES</span>
                 <span class="text-xl font-mono font-bold text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)] flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
                     {totalSources.toLocaleString()}
@@ -116,10 +116,8 @@
             </div>
         </div>
 
-
-
         <!-- Real-time Clock -->
-        <div class="hidden xl:flex items-center gap-3 pl-6">
+        <div class="hidden xl:flex items-center gap-3 pl-2">
             <div class="flex flex-col items-end">
                 <span class="text-[10px] text-neon-blue/70 font-mono tracking-widest uppercase">{date}</span>
                 <span class="text-xl font-mono font-bold text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]">

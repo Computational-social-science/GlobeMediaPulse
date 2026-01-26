@@ -23,6 +23,7 @@ except Exception as e:
     logger.warning(f"Spacy import failed: {e}. Geolocation might be limited.")
     SPACY_AVAILABLE = False
     
+from backend.operators.intelligence.geoparsing import GeoParser
 from backend.operators.storage import storage_operator
 from backend.operators.intelligence.source_classifier import source_classifier
 from backend.operators.vision.fingerprinter import visual_fingerprinter
@@ -255,7 +256,32 @@ class ClassificationPipeline:
     Research Motivation:
         - Enhances raw crawled items with intelligence data (Tier, Country, Domain).
         - Ensures consistent data labeling before storage or further processing.
+        - [NEW] Uses Advanced GeoParser (Geograpy3 + WHOIS + Consensus) for location.
     """
+    def __init__(self):
+        self.geo_parser = None
+        # Manual Overrides for Major Global Media (High Precision)
+        self.domain_overrides = {
+            'nytimes': 'USA', 'wsj': 'USA', 'washingtonpost': 'USA', 'cnn': 'USA', 'foxnews': 'USA', 'usatoday': 'USA', 'nbcnews': 'USA', 'cnbc': 'USA', 'bloomberg': 'USA', 'apnews': 'USA', 'npr': 'USA',
+            'bbc': 'GBR', 'reuters': 'GBR', 'theguardian': 'GBR', 'independent': 'GBR', 'dailymail': 'GBR', 'telegraph': 'GBR', 'skynews': 'GBR',
+            'aljazeera': 'QAT',
+            'rt': 'RUS', 'sputniknews': 'RUS', 'tass': 'RUS', 'moscowtimes': 'RUS',
+            'xinhua': 'CHN', 'chinadaily': 'CHN', 'scmp': 'HKG', 'globaltimes': 'CHN',
+            'dw': 'DEU', 'france24': 'FRA', 'euronews': 'FRA',
+            'kyodonews': 'JPN', 'japantimes': 'JPN', 'asahi': 'JPN',
+            'yonhap': 'KOR', 'koreaherald': 'KOR',
+            'thehindu': 'IND', 'timesofindia': 'IND', 'hindustantimes': 'IND',
+            'straitstimes': 'SGP', 'bangkokpost': 'THA', 'jakartapost': 'IDN',
+            'smh': 'AUS', 'abc': 'AUS',
+            'globeandmail': 'CAN', 'cbc': 'CAN',
+            'folha': 'BRA', 'clarin': 'ARG'
+        }
+
+    def open_spider(self, spider):
+        # Initialize GeoParser with Redis URL from settings
+        redis_url = spider.settings.get('REDIS_URL')
+        self.geo_parser = GeoParser(redis_url)
+
     def process_item(self, item, spider):
         # Skip enrichment for structural/candidate items
         if isinstance(item, (CandidateSourceItem, SourceUpdateItem)):
@@ -265,143 +291,67 @@ class ClassificationPipeline:
         url = adapter.get('url')
         
         if url:
-            # Query the SourceClassifier for metadata
+            # 1. Basic Metadata from SourceClassifier
             classification = source_classifier.classify(url)
             if not adapter.get('source_tier'):
                 adapter['source_tier'] = classification.get('tier')
             if not adapter.get('source_domain'):
                 adapter['source_domain'] = classification.get('source_domain')
             
-            # 1. Seed/Classifier Match (High Confidence)
+            # 2. Determine Initial 'Existing Code'
+            # Priority: Classifier > Domain Override > TLD
+            existing_code = 'UNK'
+            
+            # A. Classifier
             if classification.get('country'):
-                adapter['country_code'] = classification.get('country')
-                adapter['country_confidence'] = 'high'
-            else:
-                adapter['country_confidence'] = 'unknown'
+                existing_code = classification.get('country')
             
-            # TLD Fallback for Country (Enhanced)
-            # If country is missing or UNK, try to infer from Top Level Domain using enhanced logic
-            if not adapter.get('country_code') or adapter.get('country_code') == 'UNK':
-                adapter['country_code'] = self._infer_country_from_tld(url)
-                if adapter['country_code'] != 'UNK':
-                    adapter['country_confidence'] = 'low'
-            
-            # Final Fallback: Check against GeoJSON Name Map & Manual Overrides
-            if (not adapter.get('country_code') or adapter.get('country_code') == 'UNK'):
+            # B. Domain Override (if UNK)
+            if existing_code == 'UNK':
                 domain = adapter.get('source_domain') or urlparse(url).netloc
                 domain_lower = domain.lower()
-                
-                # 1. Check Manual Overrides (Fastest & Most Accurate for Majors)
-                if hasattr(self, 'domain_overrides'):
-                    for key, code in self.domain_overrides.items():
-                        if key in domain_lower:
-                            adapter['country_code'] = code
-                            adapter['country_confidence'] = 'high' # Manual overrides are trusted
-                            # logger.debug(f"Country inferred via Override: {domain} -> {code}")
-                            break
-                
-                # 2. Check GeoJSON Name Map (Broadest)
-                if (not adapter.get('country_code') or adapter.get('country_code') == 'UNK') and hasattr(self, 'country_code_map'):
-                    for name, code in self.country_code_map.items():
-                        # Use word boundary check or strict inclusion to avoid false positives?
-                        # For now, simple inclusion but ensuring some length to avoid matching "in" to "India" or "us" to "Cyprus" (unlikely with full names)
-                        if len(name) > 3 and name in domain_lower:
-                            adapter['country_code'] = code
-                            adapter['country_confidence'] = 'medium' # Inferred from name
-                            # logger.debug(f"Country inferred via GeoJSON: {domain} -> {code}")
-                            break
-
-            # --- Content-Based Geolocation (New Feature) ---
-            # If confidence is low or unknown, try to validate/infer using content scanning
-            current_conf = adapter.get('country_confidence')
-            if current_conf in ['low', 'unknown']:
-                content_text = (adapter.get('title') or "") + " " + (adapter.get('content') or "")
-                # Limit scan to first 1000 chars for performance
-                content_text = content_text[:1000] 
-                
-                inferred_code = self._infer_country_from_content(content_text)
-                
-                if inferred_code:
-                    # Case A: Confirmation (TLD said 'low', Content agrees) -> Upgrade to 'medium'
-                    if current_conf == 'low' and adapter.get('country_code') == inferred_code:
-                        adapter['country_confidence'] = 'medium'
-                        # logger.debug(f"Confidence Upgrade (TLD+Content): {url} -> {inferred_code}")
-                    
-                    # Case B: New Inference (Was 'unknown', Content found match) -> Set to 'medium'
-                    elif current_conf == 'unknown':
-                        adapter['country_code'] = inferred_code
-                        adapter['country_confidence'] = 'medium'
-                        # logger.debug(f"Content Inference: {url} -> {inferred_code}")
+                for key, code in self.domain_overrides.items():
+                    if key in domain_lower:
+                        existing_code = code
+                        break
+            
+            # C. TLD (if UNK)
+            if existing_code == 'UNK':
+                existing_code = self._infer_country_from_tld(url)
+            
+            # 3. Advanced Geoparsing (Consensus: Existing + WHOIS + Text)
+            # Prepare text content for extraction
+            text_content = (adapter.get('title') or "") + " " + (adapter.get('content') or "")
+            # Limit text length to avoid performance hit
+            text_content = text_content[:5000]
+            
+            # Resolve
+            # Default tier to 2 if not found
+            tier = adapter.get('source_tier') or 2
+            country_code, confidence = self.geo_parser.resolve(
+                url=url,
+                text=text_content,
+                tier=tier,
+                existing_code=existing_code
+            )
+            
+            adapter['country_code'] = country_code
+            adapter['country_confidence'] = confidence
 
         return item
-
-    def _infer_country_from_content(self, text):
-        """
-        Scans text for Country Names using Spacy NER or fallback dictionary.
-        Returns the country code if a significant match is found (Subject Country).
-        """
-        if not text:
-            return None
-        
-        # 1. Spacy NER (Preferred)
-        if getattr(self, 'nlp', None):
-            try:
-                doc = self.nlp(text)
-                # Count GPE entities
-                gpe_counts = Counter()
-                
-                for ent in doc.ents:
-                    if ent.label_ == 'GPE':
-                        # Clean text: remove 'the', punctuation, etc if needed. Spacy usually gives clean entities.
-                        name_lower = ent.text.lower().strip()
-                        # Map to Code
-                        if hasattr(self, 'country_code_map') and name_lower in self.country_code_map:
-                             gpe_counts[self.country_code_map[name_lower]] += 1
-                
-                # Get most frequent
-                if gpe_counts:
-                    # Return the most common one
-                    return gpe_counts.most_common(1)[0][0]
-                    
-            except Exception as e:
-                # logger.warning(f"NER failed: {e}")
-                pass
-        
-        # 2. Fallback: Keyword Frequency (Heuristic)
-        if not hasattr(self, 'country_code_map'):
-             return None
-             
-        text_lower = text.lower()
-        keyword_counts = Counter()
-        
-        for name, code in self.country_code_map.items():
-             if len(name) < 4: continue
-             
-             # Count occurrences (non-overlapping)
-             # Adding spaces to ensure word boundary
-             count = text_lower.count(f" {name} ")
-             if count > 0:
-                 keyword_counts[code] += count
-        
-        if keyword_counts:
-            return keyword_counts.most_common(1)[0][0]
-            
-        return None
 
     def _infer_country_from_tld(self, url):
         """
         Infers ISO-3 country code from URL TLD.
-        Enhanced to load from backend/data/countries.geo.json if available for high precision.
         """
         try:
             domain = urlparse(url).netloc
-            # Get the last part of the domain (TLD)
             parts = domain.split('.')
             if len(parts) < 2:
                 return 'UNK'
             tld = parts[-1].lower()
             
-            # 1. Enhanced TLD Map (Common + Specific)
+            # Enhanced TLD Map
             tld_map = {
                 # Asia
                 'jp': 'JPN', 'cn': 'CHN', 'in': 'IND', 'kr': 'KOR', 'id': 'IDN', 
@@ -429,94 +379,9 @@ class ClassificationPipeline:
                 'au': 'AUS', 'nz': 'NZL', 'fj': 'FJI'
             }
             
-            # 2. Check Map
-            if tld in tld_map:
-                return tld_map[tld]
-            
-            # 3. Special Case: .com/.net/.org usually implies Global or US, but let's default to UNK
-            # to encourage specific resolution unless we have domain-specific rules.
-            if tld in ['com', 'net', 'org', 'info', 'biz']:
-                # TODO: In the future, match against a specific domain list loaded from JSON
-                pass
-                
-            return 'UNK'
+            return tld_map.get(tld, 'UNK')
         except Exception:
             return 'UNK'
-
-    def open_spider(self, spider):
-        # Pre-load country codes from geojson if possible
-        try:
-            import json
-            # Adjust path to point to backend/data/countries.geo.json
-            # pipelines.py is in backend/crawlers/news_crawlers/
-            # Go up 3 levels to reach backend/
-            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            geo_path = os.path.join(backend_dir, 'data', 'countries.geo.json')
-            
-            self.country_code_map = {}
-            
-            # 1. Manual Overrides for Major Global Media (High Precision)
-            self.domain_overrides = {
-                'nytimes': 'USA', 'wsj': 'USA', 'washingtonpost': 'USA', 'cnn': 'USA', 'foxnews': 'USA', 'usatoday': 'USA', 'nbcnews': 'USA', 'cnbc': 'USA', 'bloomberg': 'USA', 'apnews': 'USA', 'npr': 'USA',
-                'bbc': 'GBR', 'reuters': 'GBR', 'theguardian': 'GBR', 'independent': 'GBR', 'dailymail': 'GBR', 'telegraph': 'GBR', 'skynews': 'GBR',
-                'aljazeera': 'QAT',
-                'rt': 'RUS', 'sputniknews': 'RUS', 'tass': 'RUS', 'moscowtimes': 'RUS',
-                'xinhuanet': 'CHN', 'chinadaily': 'CHN', 'globaltimes': 'CHN', 'scmp': 'HKG',
-                'dw': 'DEU', 'spiegel': 'DEU', 'bild': 'DEU',
-                'france24': 'FRA', 'lemonde': 'FRA', 'lefigaro': 'FRA',
-                'kyodonews': 'JPN', 'japantimes': 'JPN', 'asahi': 'JPN', 'mainichi': 'JPN', 'nikkei': 'JPN',
-                'yonhap': 'KOR', 'koreaherald': 'KOR', 'koreatimes': 'KOR',
-                'timesofindia': 'IND', 'thehindu': 'IND', 'hindustantimes': 'IND',
-                'straitstimes': 'SGP', 'channelnewsasia': 'SGP',
-                'cbc': 'CAN', 'theglobeandmail': 'CAN',
-                'abc': 'AUS', 'smh': 'AUS', 'theage': 'AUS', # abc.net.au
-                'folha': 'BRA', 'globo': 'BRA',
-                'elwatannews': 'EGY', 'ahram': 'EGY'
-            }
-            
-            if os.path.exists(geo_path):
-                with open(geo_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    for feature in data['features']:
-                        props = feature.get('properties', {})
-                        code = feature.get('id')
-                        name = props.get('name')
-                        if code and name:
-                            # Standard Map
-                            self.country_code_map[name.lower()] = code
-                            
-                            # Add 'name_zh' to map if exists
-                            if props.get('name_zh'):
-                                self.country_code_map[props.get('name_zh').lower()] = code
-                            
-                            # Add 'aliases' to map if exists
-                            if props.get('aliases'):
-                                for alias in props.get('aliases'):
-                                    self.country_code_map[alias.lower()] = code
-                            
-                            # Heuristic: Add variations for better matching
-                            # e.g., "Republic of Serbia" -> "Serbia"
-                            simple_name = name.replace('Republic of', '').replace('Kingdom of', '').replace('United Republic of', '').strip()
-                            if simple_name != name:
-                                self.country_code_map[simple_name.lower()] = code
-            else:
-                logger.warning(f"countries.geo.json not found at {geo_path}")
-
-            # --- Load Spacy for NER ---
-            self.nlp = None
-            if SPACY_AVAILABLE:
-                try:
-                    logger.info("Loading Spacy 'en_core_web_sm' for NER...")
-                    # Disable heavy components to save memory/time
-                    self.nlp = spacy.load("en_core_web_sm", disable=["parser", "tagger", "lemmatizer", "textcat"])
-                    logger.info("Spacy NER loaded.")
-                except Exception as e:
-                    logger.warning(f"Failed to load Spacy model: {e}. Falling back to keyword match.")
-                    self.nlp = None
-
-        except Exception as e:
-            logger.error(f"Failed to initialize ClassificationPipeline resources: {e}")
-            self.country_code_map = {}
 
 class PostgresStoragePipeline:
     """

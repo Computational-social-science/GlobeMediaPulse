@@ -17,13 +17,12 @@ ROBOTSTXT_OBEY = True
 
 # Concurrency & Performance Tuning
 # Research Motivation: High throughput is required to monitor global media.
-# CONCURRENT_REQUESTS = 64: Increased from 32 to accelerate media discovery.
-# WARNING: Ensure system resources (CPU/RAM) and DB connections are sufficient.
-CONCURRENT_REQUESTS = 64
+# CONCURRENT_REQUESTS: Reduced to 16 to ensure stability with Playwright and prevent resource exhaustion.
+CONCURRENT_REQUESTS = 16
 
 # Rate Limiting
-# DOWNLOAD_DELAY = 0.5: Reduced from 1s to 0.5s to speed up crawling while remaining reasonably polite.
-DOWNLOAD_DELAY = 0.5
+# DOWNLOAD_DELAY: Increased to 1.0s to ensure politeness and avoid IP bans.
+DOWNLOAD_DELAY = 1.0
 
 # Disable cookies to prevent tracking and session issues
 COOKIES_ENABLED = False
@@ -78,10 +77,18 @@ DOWNLOAD_HANDLERS = {
     "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
     "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
 }
-PLAYWRIGHT_LAUNCH_OPTIONS = {
-    "headless": True,
-    "timeout": 30000,  # Increased to 30s to reduce timeout failures under high load
-    "args": ["--disable-gpu", "--no-sandbox"] # Optimization for server environments
-}
+
+# Remote Playwright (Docker/Production) vs Local Playwright (Dev)
+PLAYWRIGHT_CDP_URL = os.getenv("PLAYWRIGHT_CDP_URL")
+if PLAYWRIGHT_CDP_URL:
+    # Use remote browser (e.g., browserless/chrome in Docker)
+    pass
+else:
+    # Use local browser
+    PLAYWRIGHT_LAUNCH_OPTIONS = {
+        "headless": True,
+        "timeout": 30000,
+        "args": ["--disable-gpu", "--no-sandbox"]
+    }
 # Optimize Twisted Reactor for high concurrency
 REACTOR_THREADPOOL_MAXSIZE = 30
