@@ -55,4 +55,5 @@ class SourceUpdateItem(scrapy.Item):
     logo_hash = scrapy.Field()          # Visual Fingerprint (pHash)
     copyright_text = scrapy.Field()     # Textual Fingerprint
     structure_simhash = scrapy.Field()
+    rss_feed_urls = scrapy.Field()      # Discovered RSS/Atom Feeds
     http_status = scrapy.Field()

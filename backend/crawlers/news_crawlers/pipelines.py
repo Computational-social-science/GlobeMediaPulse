@@ -77,28 +77,10 @@ class EntityAlignmentPipeline:
         self.device = "cpu"
 
     def open_spider(self, spider):
-        # Lazy load the model to avoid overhead if not used or if dependencies missing
-        try:
-            from transformers import AutoTokenizer, AutoModel
-            import torch
-            
-            # Use a lightweight multilingual model: 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
-            # Or a smaller one: 'sentence-transformers/all-MiniLM-L6-v2' (mostly English but handles some others)
-            # For true cross-lingual, we need a multilingual model.
-            # Using a widely cached/available small model name.
-            model_name = "sentence-transformers/all-MiniLM-L6-v2" 
-            
-            logger.info(f"Initializing Cross-Lingual Vectorizer: {model_name}")
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.model = AutoModel.from_pretrained(model_name)
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.model.to(self.device)
-            logger.info(f"Vectorizer initialized on {self.device}")
-            
-        except ImportError:
-            logger.warning("Transformers library not found. Cross-lingual vectorization disabled.")
-        except Exception as e:
-            logger.warning(f"Failed to load vectorization model: {e}")
+        # Heavy ML dependencies (Transformers/Torch) are disabled for lightweight operation.
+        # This pipeline stage is now a pass-through for vectorization.
+        logger.info("Cross-Lingual Vectorization disabled (Lightweight Mode).")
+        self.model = None
 
     def process_item(self, item, spider):
         if isinstance(item, (CandidateSourceItem, SourceUpdateItem)):
@@ -111,42 +93,13 @@ class EntityAlignmentPipeline:
         entities = entity_aligner.extract_and_align(text_content)
         adapter['entities'] = entities
         
-        # 2. Cross-Lingual Vectorization
-        # Research Goal: Compute Cosine Similarity: $ \text{sim}(A, B) = \frac{A \cdot B}{\|A\| \|B\|} $
-        if self.model and text_content.strip():
-            try:
-                embedding = self._vectorize(text_content)
-                # Store the embedding (as a list/bytes) for downstream storage or comparison
-                # Note: Storing raw floats in DB can be heavy. Usually we store in Vector DB.
-                # Here we attach it to the item for potential real-time comparison.
-                adapter['narrative_vector'] = embedding
-            except Exception as e:
-                logger.error(f"Vectorization failed: {e}")
+        # 2. Cross-Lingual Vectorization (Disabled)
+        # narrative_vector remains None
         
         return item
 
     def _vectorize(self, text):
-        """
-        Computes the dense vector representation of the text using Mean Pooling.
-        Mathematical Formalism:
-        Given input tokens $ X = \{x_1, ..., x_n\} $, the sentence embedding $ v $ is:
-        $$ v = \frac{1}{n} \sum_{i=1}^{n} \text{BERT}(x_i) $$
-        """
-        import torch
-        inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=128).to(self.device)
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-        
-        # Mean Pooling - Take attention mask into account for correct averaging
-        token_embeddings = outputs.last_hidden_state
-        attention_mask = inputs['attention_mask']
-        
-        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-        sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
-        sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-        
-        mean_pooled = sum_embeddings / sum_mask
-        return mean_pooled[0].cpu().tolist()
+        return None
 
 class NarrativeAnalysisPipeline:
     """
@@ -214,39 +167,6 @@ class RedisPublishPipeline:
         except Exception as e:
             spider.logger.error(f"Failed to publish to Redis: {e}")
             
-        return item
-
-class VisualFingerprintPipeline:
-    """
-    Intelligence Pipeline Stage 2: Visual & Textual Fingerprinting.
-    
-    Research Motivation:
-        - Downloads logos and computes pHash for 'Sockpuppet' detection.
-    """
-    def process_item(self, item, spider):
-        adapter = ItemAdapter(item)
-        
-        # 1. Fallback Logo Extraction (Favicon)
-        # If no logo is explicitly found, guess the favicon location
-        if not adapter.get('logo_url'):
-            url = adapter.get('url')
-            if url:
-                try:
-                    parsed = urlparse(url)
-                    # Simple favicon guess: scheme://domain/favicon.ico
-                    adapter['logo_url'] = f"{parsed.scheme}://{parsed.netloc}/favicon.ico"
-                except Exception:
-                    pass
-
-        # 2. Existing Compute Hash Logic (only if we have a URL)
-        if isinstance(item, SourceUpdateItem):
-            logo_url = adapter.get('logo_url')
-            
-            if logo_url:
-                logger.debug(f"Computing logo hash for {logo_url}")
-                logo_hash = visual_fingerprinter.compute_logo_hash(logo_url)
-                adapter['logo_hash'] = logo_hash
-                
         return item
 
 class ClassificationPipeline:

@@ -6,9 +6,9 @@ from scrapy.linkextractors import LinkExtractor
 from backend.operators.intelligence.source_classifier import source_classifier
 from news_crawlers.items import NewsArticleItem, CandidateSourceItem, SourceUpdateItem
 import trafilatura
+from trafilatura.feeds import find_feed_urls
 from urllib.parse import urlparse
 from backend.utils.simhash import compute_structural_simhash
-from backend.operators.vision.fingerprinter import visual_fingerprinter
 
 class UniversalNewsSpider(RedisSpider):
     """
@@ -65,7 +65,8 @@ class UniversalNewsSpider(RedisSpider):
             logo_url = response.urljoin(logo_url)
             
         # Extract Copyright Text (Textual Fingerprint)
-        copyright_text = visual_fingerprinter.extract_copyright(response.text)
+        # copyright_text = visual_fingerprinter.extract_copyright(response.text)
+        copyright_text = None
             
         # Yield Source Update Item (for metadata persistence)
         update_item = SourceUpdateItem()
@@ -104,6 +105,52 @@ class UniversalNewsSpider(RedisSpider):
                     item['found_on'] = response.url
                     item['tier_suggestion'] = 'Tier-2' # Hypothesis: Tier-0/1 sources cite Tier-2 sources
                     yield item
+
+    def parse_feed(self, response):
+        """
+        Parse RSS/Atom feed to discover new candidate sources.
+        
+        Methodology:
+            - **Feed-Based Discovery**: RSS feeds often link to external sources (e.g. "Planet" aggregators)
+              or contain cross-references.
+            - **Protocol Agnostic**: Handles both RSS (<item><link>) and Atom (<entry><link>).
+        """
+        # Register Atom namespace for XPath
+        response.selector.register_namespace('atom', 'http://www.w3.org/2005/Atom')
+        
+        # Extract links from items/entries
+        links = set()
+        # RSS <link>
+        links.update(response.xpath('//item/link/text()').getall())
+        # Atom <link href="...">
+        links.update(response.xpath('//atom:entry/atom:link/@href').getall())
+        
+        origin_domain = response.meta.get('source_domain')
+        if not origin_domain:
+            parsed = urlparse(response.url)
+            origin_domain = parsed.netloc.replace('www.', '')
+        
+        for link in links:
+             # Basic validation
+             if not link.startswith('http'):
+                 continue
+                 
+             try:
+                 parsed = urlparse(link)
+                 if not parsed.netloc:
+                     continue
+                     
+                 link_domain = parsed.netloc.replace('www.', '')
+                 
+                 # If link points to external domain -> Candidate!
+                 if link_domain != origin_domain and link_domain not in self.seeds:
+                      cand = CandidateSourceItem()
+                      cand['domain'] = link_domain
+                      cand['found_on'] = response.url
+                      cand['tier_suggestion'] = 'Tier-2'
+                      yield cand
+             except:
+                 continue
 
     def parse_article(self, response):
         """

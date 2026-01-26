@@ -75,6 +75,16 @@ def test_geoparsing():
             print(f"⚠️ Mismatch (Expected {case['expected']}) - Check logic/WHOIS")
 
     # Test Caching
+    # Test 4: Media Cloud Verification (New)
+    # This assumes 'chinadaily.com.cn' was imported as CHN
+    print("\nTesting: http://www.chinadaily.com.cn/world/2023-10/10/content_123456.htm")
+    result, confidence = geo_parser.resolve("http://www.chinadaily.com.cn/world/2023-10/10/content_123456.htm", "Some random text")
+    print(f"Result: {result} (Confidence: {confidence})")
+    if result == 'CHN':
+         print("✅ Match Expected (Media Cloud)")
+    else:
+         print(f"❌ Match Failed. Expected CHN, Got {result}")
+
     print("\nTesting Cache...")
     url = "https://www.bbc.com/news/test-cache"
     domain = urlparse(url).netloc

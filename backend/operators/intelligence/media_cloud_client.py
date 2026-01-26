@@ -6,6 +6,8 @@ from backend.core.config import settings
 from backend.core.models import MediaSource
 from backend.core.database import SessionLocal
 
+from urllib.parse import urlparse
+
 logger = logging.getLogger(__name__)
 
 class MediaCloudIntegrator:
@@ -94,32 +96,44 @@ class MediaCloudIntegrator:
         count_new = 0
         count_updated = 0
         
+        # DEBUG: Print structure of first source
+        if sources:
+            logger.info(f"Sample Source Data: {sources[0].keys()}")
+
         try:
             for src in sources:
-                url = src.get('url')
-                name = src.get('name')
-                mc_id = src.get('media_id')
+                # Map MediaCloud API fields to our model
+                url = src.get('homepage') or src.get('url')
+                name = src.get('name') or src.get('label')
                 
                 if not url:
                     continue
                     
-                # Check if exists
-                existing = db.query(MediaSource).filter(MediaSource.base_url == url).first()
+                # Basic normalization
+                if not url.startswith('http'):
+                    url = 'http://' + url
+                
+                try:
+                    domain = urlparse(url).netloc
+                    if not domain:
+                        continue
+                    # Strip www.
+                    if domain.startswith('www.'):
+                        domain = domain[4:]
+                except:
+                    continue
+                    
+                # Check existence
+                existing = db.query(MediaSource).filter(MediaSource.domain == domain).first()
                 
                 if existing:
-                    # Update metadata if needed
-                    # We could store the MediaCloud ID for future reference
-                    # existing.metadata['mediacloud_id'] = mc_id
                     count_updated += 1
                 else:
-                    # Insert new
                     new_source = MediaSource(
-                        name=name or "Unknown",
-                        base_url=url,
-                        country=country_code,
-                        tier=default_tier,
-                        trust_score=0.5, # Default neutral
-                        is_active=True
+                        name=name or domain,
+                        domain=domain,
+                        tier=f"Tier-{default_tier}",
+                        country_code=country_code
                     )
                     db.add(new_source)
                     count_new += 1
@@ -128,27 +142,33 @@ class MediaCloudIntegrator:
             logger.info(f"Media Cloud Sync: {count_new} new, {count_updated} updated.")
             
         except Exception as e:
-            logger.error(f"Error syncing sources to DB: {e}")
+            logger.error(f"Error syncing to DB: {e}")
             db.rollback()
         finally:
             db.close()
 
     def verify_source_location(self, url: str) -> Optional[str]:
         """
-        Use Media Cloud as an authority to verify a source's country.
-        This is expensive as it might require searching the source in MC directory.
+        Use Media Cloud data (synced locally) to verify a source's country.
         """
-        if not self.directory_api:
+        if not url:
             return None
             
         try:
-            # Search for the source by URL
-            # Note: DirectoryApi might have source_list(name=...) or similar url search
-            # If not, we rely on the broader collection fetch.
-            # Assuming we can search by name/url:
-            response = self.directory_api.source_list(name_search=url) # Hypothetical param, check docs if real
-            # The actual API usage might vary.
-            # For now, return None as placeholder until API details are confirmed.
+            # Normalize URL to domain
+            domain = urlparse(url).netloc
+            if domain.startswith('www.'):
+                domain = domain[4:]
+                
+            db: Session = SessionLocal()
+            try:
+                # Query local DB which is synced with Media Cloud
+                source = db.query(MediaSource).filter(MediaSource.domain == domain).first()
+                if source and source.country_code and source.country_code != 'UNK':
+                    return source.country_code
+            finally:
+                db.close()
+                
             return None
         except Exception as e:
             logger.error(f"Error verifying source {url}: {e}")

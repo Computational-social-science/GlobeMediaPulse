@@ -52,23 +52,10 @@ geopy>=2.4.0
 geograpy3 @ git+https://github.com/somnathrakshit/geograpy3.git
 python-whois
 mediacloud>=0.8.0
-pycountry
 
 # ==========================================
-# ML & Analysis (Transformers/Torch)
+# Utils
 # ==========================================
-transformers>=4.30.0
-torch --extra-index-url https://download.pytorch.org/whl/cpu
-sentencepiece
-protobuf
-optimum
-onnxruntime
-pandas>=2.0.0
-numpy>=1.24.0
-scikit-learn>=1.3.0
-ruptures>=1.1.9
-imagehash
-Pillow
 
 # ==========================================
 # Development & Testing
