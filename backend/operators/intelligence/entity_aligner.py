@@ -5,7 +5,8 @@ from typing import List, Dict, Any, Optional
 
 try:
     import spacy
-except ImportError:
+except Exception as e:
+    logging.getLogger(__name__).warning(f"Spacy import failed: {e}. Running in degraded mode (No Entity Alignment).")
     spacy = None
 
 logger = logging.getLogger(__name__)
