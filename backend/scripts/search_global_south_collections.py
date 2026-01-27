@@ -3,6 +3,7 @@ import os
 import sys
 import logging
 import mediacloud.api
+import traceback
 from dotenv import load_dotenv
 
 # Add project root to path
@@ -71,11 +72,6 @@ def search_collections(api_key, country_names):
                 msg = f"  No collections found for {country}"
                 logger.warning(msg)
                 print(msg)
-                
-import traceback
-
-# ...
-
         except Exception as e:
             msg = f"  Error searching for {country}: {e}"
             logger.error(msg)

@@ -35,9 +35,9 @@ class WebSocketLogHandler(logging.Handler):
                 loop = asyncio.get_running_loop()
                 if loop.is_running():
                     loop.create_task(ws_manager.broadcast({
-                        "type": "log_entry",
-                        "payload": log_data
-                    }))
+                            "type": "log",
+                            "payload": log_data
+                        }))
             except RuntimeError:
                 # Loop might not be running yet or we are in a different thread
                 pass

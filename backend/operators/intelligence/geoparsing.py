@@ -66,52 +66,121 @@ class GeoParser:
         """
         mapping = {}
         coords = {}
-        # Correct path to the root data directory
-        json_path = os.path.join(settings.BASE_DIR, 'data', 'countries_data.json')
-        
-        if os.path.exists(json_path):
-            try:
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    countries = []
-                    if isinstance(data, dict) and "COUNTRIES" in data:
-                        countries = data["COUNTRIES"]
-                    elif isinstance(data, list):
-                        countries = data
-                        
-                    for c in countries:
-                        code = c.get('code') # ISO-3
-                        name = c.get('name')
-                        official_name = c.get('official_name')
-                        lat = c.get('lat')
-                        lng = c.get('lng')
-                        
-                        if code:
-                            # Populate coords
-                            if lat is not None and lng is not None:
-                                coords[code] = {'lat': float(lat), 'lng': float(lng)}
+        json_candidates = [
+            os.path.join(settings.BASE_DIR, "data", "countries_data.json"),
+            os.path.join(settings.BASE_DIR, "..", "data", "countries_data.json"),
+        ]
+        json_path = next((p for p in json_candidates if os.path.exists(p)), None)
 
-                            # Populate name mapping
-                            if name:
-                                mapping[name.lower()] = code
-                            if official_name:
-                                mapping[official_name.lower()] = code
-                                
-                            # Add aliases or alternate names if available in the future
-                            # Currently utilizing name and official_name
-                            
-                            # Also map alpha2 if unique
-                            if c.get('code_alpha2'):
-                                mapping[c.get('code_alpha2').lower()] = code
-                            
-                            # Map native names if available (for future expansion)
-                            # e.g., "Deutschland" -> DEU
-                            
+        if json_path:
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                countries = []
+                if isinstance(data, dict) and "COUNTRIES" in data:
+                    countries = data["COUNTRIES"]
+                elif isinstance(data, list):
+                    countries = data
+
+                for c in countries:
+                    if not isinstance(c, dict):
+                        continue
+                    code = c.get("code")
+                    if not code:
+                        continue
+                    code = str(code).upper()
+                    name = c.get("name")
+                    official_name = c.get("official_name")
+                    lat = c.get("lat")
+                    lng = c.get("lng")
+                    if lat is not None and lng is not None:
+                        coords[code] = {"lat": float(lat), "lng": float(lng)}
+                    if name:
+                        mapping[str(name).lower()] = code
+                    if official_name:
+                        mapping[str(official_name).lower()] = code
+                    if c.get("code_alpha2"):
+                        mapping[str(c.get("code_alpha2")).lower()] = code
             except Exception as e:
                 logger.error(f"Failed to load countries_data.json: {e}")
-        else:
-            logger.warning(f"countries_data.json not found at {json_path}")
-            
+                json_path = None
+
+        if not json_path:
+            geojson_candidates = [
+                os.path.join(settings.BASE_DIR, "backend", "data", "countries.geo.json"),
+                os.path.join(settings.BASE_DIR, "backend", "core", "data", "countries.geo.json"),
+                os.path.join(settings.BASE_DIR, "data", "countries.geo.json"),
+            ]
+            geojson_path = next((p for p in geojson_candidates if os.path.exists(p)), None)
+            if geojson_path:
+                try:
+                    with open(geojson_path, "r", encoding="utf-8") as f:
+                        geo = json.load(f)
+                    features = geo.get("features", [])
+                    if isinstance(features, list):
+                        try:
+                            import pycountry
+                        except Exception:
+                            pycountry = None
+                        for feature in features:
+                            if not isinstance(feature, dict):
+                                continue
+                            code = feature.get("id")
+                            if not code:
+                                continue
+                            code = str(code).upper()
+                            if code == "CS-KM":
+                                code = "XKX"
+                            props = feature.get("properties", {})
+                            if not isinstance(props, dict):
+                                props = {}
+                            name = props.get("name")
+                            if name:
+                                mapping[str(name).lower()] = code
+                            aliases = props.get("aliases")
+                            if isinstance(aliases, list):
+                                for alias in aliases:
+                                    if alias:
+                                        mapping[str(alias).lower()] = code
+                            lat = props.get("lat")
+                            lng = props.get("lng")
+                            if lat is None or lng is None:
+                                center = None
+                                geometry = feature.get("geometry")
+                                if isinstance(geometry, dict) and geometry.get("type") in ("Polygon", "MultiPolygon"):
+                                    coords_list = geometry.get("coordinates")
+                                    ring = None
+                                    if geometry.get("type") == "Polygon" and isinstance(coords_list, list) and coords_list and isinstance(coords_list[0], list):
+                                        ring = coords_list[0]
+                                    if geometry.get("type") == "MultiPolygon" and isinstance(coords_list, list) and coords_list and isinstance(coords_list[0], list) and coords_list[0] and isinstance(coords_list[0][0], list):
+                                        ring = coords_list[0][0]
+                                    if isinstance(ring, list) and ring:
+                                        lng_sum = 0.0
+                                        lat_sum = 0.0
+                                        n = 0
+                                        for pt in ring:
+                                            if not isinstance(pt, list) or len(pt) < 2:
+                                                continue
+                                            try:
+                                                lng_sum += float(pt[0])
+                                                lat_sum += float(pt[1])
+                                                n += 1
+                                            except Exception:
+                                                continue
+                                        if n:
+                                            center = {"lat": lat_sum / n, "lng": lng_sum / n}
+                                if center:
+                                    lat = center.get("lat")
+                                    lng = center.get("lng")
+                            if lat is not None and lng is not None:
+                                coords[code] = {"lat": float(lat), "lng": float(lng)}
+                            if pycountry:
+                                c = pycountry.countries.get(alpha_3=code)
+                                if c and getattr(c, "alpha_2", None):
+                                    mapping[str(c.alpha_2).lower()] = code
+                except Exception as e:
+                    logger.error(f"Failed to load countries.geo.json: {e}")
+
         return mapping, coords
 
     def get_coords(self, country_code: str) -> Optional[Dict[str, float]]:
@@ -356,4 +425,3 @@ class GeoParser:
             self.redis.publish("news_pulse", json.dumps(payload))
         except Exception as e:
             logger.debug(f"Redis publish failed: {e}")
-

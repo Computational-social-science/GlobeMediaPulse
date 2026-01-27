@@ -35,9 +35,20 @@ class PostgresStorageOperator:
 
     def _load_countries_map(self):
         self.countries_map = {}
-        data_path = os.path.join("data", "countries_data.json")
-        geojson_path = os.path.join("backend", "data", "countries.geo.json")
-        if os.path.exists(data_path):
+        data_candidates = [
+            os.path.join("data", "countries_data.json"),
+            os.path.join("..", "data", "countries_data.json"),
+        ]
+        data_path = next((p for p in data_candidates if os.path.exists(p)), None)
+        geojson_candidates = [
+            os.path.join("backend", "data", "countries.geo.json"),
+            os.path.join("data", "countries.geo.json"),
+            os.path.join("backend", "core", "data", "countries.geo.json"),
+            os.path.join("core", "data", "countries.geo.json"),
+        ]
+        geojson_path = next((p for p in geojson_candidates if os.path.exists(p)), None)
+
+        if data_path:
             try:
                 with open(data_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -65,7 +76,7 @@ class PostgresStorageOperator:
                 return
             except Exception as e:
                 logger.error(f"Failed to load countries_data.json: {e}")
-        if os.path.exists(geojson_path):
+        if geojson_path:
             try:
                 with open(geojson_path, "r", encoding="utf-8") as f:
                     geo_data = json.load(f)
@@ -76,6 +87,31 @@ class PostgresStorageOperator:
                     lat = props.get("lat")
                     lng = props.get("lng")
                     region = props.get("region") or "Unknown"
+                    if (lat is None or lng is None) and isinstance(feature, dict):
+                        geometry = feature.get("geometry", {})
+                        if isinstance(geometry, dict) and geometry.get("type") in ("Polygon", "MultiPolygon"):
+                            coords_list = geometry.get("coordinates")
+                            ring = None
+                            if geometry.get("type") == "Polygon" and isinstance(coords_list, list) and coords_list and isinstance(coords_list[0], list):
+                                ring = coords_list[0]
+                            if geometry.get("type") == "MultiPolygon" and isinstance(coords_list, list) and coords_list and isinstance(coords_list[0], list) and coords_list[0] and isinstance(coords_list[0][0], list):
+                                ring = coords_list[0][0]
+                            if isinstance(ring, list) and ring:
+                                lng_sum = 0.0
+                                lat_sum = 0.0
+                                n = 0
+                                for pt in ring:
+                                    if not isinstance(pt, list) or len(pt) < 2:
+                                        continue
+                                    try:
+                                        lng_sum += float(pt[0])
+                                        lat_sum += float(pt[1])
+                                        n += 1
+                                    except Exception:
+                                        continue
+                                if n:
+                                    lat = lat if lat is not None else lat_sum / n
+                                    lng = lng if lng is not None else lng_sum / n
                     if not code or not name or lat is None or lng is None:
                         continue
                     self.countries_map[name] = {
@@ -119,19 +155,185 @@ class PostgresStorageOperator:
                 with conn.cursor() as cursor:
                     # Select all fields required for MediaSource model instantiation
                     cursor.execute("""
-                        SELECT domain, name, tier, country_code, country_name, type, language, logo_url, structure_simhash 
+                        SELECT domain, name, abbreviation, tier, country_code, country_name, type, language, logo_url, structure_simhash 
                         FROM media_sources
                     """)
                     rows = cursor.fetchall()
                     
                     columns = [desc[0] for desc in cursor.description]
                     for row in rows:
-                        sources.append(dict(zip(columns, row)))
+                        record = dict(zip(columns, row))
+                        abbr = record.get("abbreviation")
+                        record["abbr"] = abbr
+                        record["short_name"] = abbr or record.get("name")
+                        sources.append(record)
                         
         except Exception as e:
             logger.error(f"Critical Error: Failed to fetch media sources from DB: {e}")
             
         return sources
+
+    def get_all_candidate_sources(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        candidates: List[Dict[str, Any]] = []
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return []
+                with conn.cursor() as cursor:
+                    sql = """
+                        SELECT domain, found_on, found_at, status, tier_suggestion, citation_count
+                        FROM candidate_sources
+                        ORDER BY citation_count DESC, found_at DESC
+                    """
+                    params: tuple[Any, ...] = tuple()
+                    if isinstance(limit, int) and limit > 0:
+                        sql += " LIMIT %s"
+                        params = (limit,)
+                    cursor.execute(sql, params)
+                    rows = cursor.fetchall()
+                    columns = [desc[0] for desc in cursor.description]
+                    for row in rows:
+                        candidates.append(dict(zip(columns, row)))
+        except Exception as e:
+            logger.error(f"Critical Error: Failed to fetch candidate sources from DB: {e}")
+        return candidates
+
+    def bulk_upsert_media_sources(self, sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not sources:
+            return {"processed": 0}
+        processed = 0
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return {"processed": 0, "error": "db_unavailable"}
+                with conn.cursor() as cursor:
+                    rows: List[tuple[Any, ...]] = []
+                    for s in sources:
+                        if not isinstance(s, dict):
+                            continue
+                        domain = s.get("domain")
+                        name = s.get("name")
+                        if not domain or not name:
+                            continue
+                        rows.append(
+                            (
+                                str(domain).lower(),
+                                str(name),
+                                s.get("abbreviation") or s.get("abbr"),
+                                s.get("country_code"),
+                                s.get("country_name"),
+                                s.get("language"),
+                                s.get("tier"),
+                                s.get("type"),
+                                s.get("logo_url"),
+                                s.get("logo_hash"),
+                                s.get("copyright_text"),
+                                s.get("structure_simhash"),
+                            )
+                        )
+                    if not rows:
+                        return {"processed": 0}
+                    cursor.executemany(
+                        """
+                        INSERT INTO media_sources (
+                            domain, name, abbreviation, country_code, country_name, language,
+                            tier, type, logo_url, logo_hash, copyright_text, structure_simhash, created_at, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                        ON CONFLICT (domain) DO UPDATE SET
+                            name = EXCLUDED.name,
+                            abbreviation = COALESCE(EXCLUDED.abbreviation, media_sources.abbreviation),
+                            country_code = COALESCE(EXCLUDED.country_code, media_sources.country_code),
+                            country_name = COALESCE(EXCLUDED.country_name, media_sources.country_name),
+                            language = COALESCE(EXCLUDED.language, media_sources.language),
+                            tier = COALESCE(EXCLUDED.tier, media_sources.tier),
+                            type = COALESCE(EXCLUDED.type, media_sources.type),
+                            logo_url = COALESCE(EXCLUDED.logo_url, media_sources.logo_url),
+                            logo_hash = COALESCE(EXCLUDED.logo_hash, media_sources.logo_hash),
+                            copyright_text = COALESCE(EXCLUDED.copyright_text, media_sources.copyright_text),
+                            structure_simhash = COALESCE(EXCLUDED.structure_simhash, media_sources.structure_simhash),
+                            updated_at = NOW()
+                        """,
+                        rows,
+                    )
+                    processed = len(rows)
+                    conn.commit()
+        except Exception as e:
+            logger.error(f"Bulk upsert media sources failed: {e}")
+            return {"processed": processed, "error": str(e)}
+        return {"processed": processed}
+
+    def bulk_upsert_candidate_sources(self, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not candidates:
+            return {"processed": 0}
+        processed = 0
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return {"processed": 0, "error": "db_unavailable"}
+                with conn.cursor() as cursor:
+                    rows: List[tuple[Any, ...]] = []
+                    for c in candidates:
+                        if not isinstance(c, dict):
+                            continue
+                        domain = c.get("domain")
+                        if not domain:
+                            continue
+                        citation = c.get("citation_count")
+                        try:
+                            citation_i = int(citation) if citation is not None else None
+                        except Exception:
+                            citation_i = None
+                        rows.append(
+                            (
+                                str(domain).lower(),
+                                c.get("found_on"),
+                                c.get("status"),
+                                c.get("tier_suggestion"),
+                                citation_i,
+                            )
+                        )
+                    if not rows:
+                        return {"processed": 0}
+                    cursor.executemany(
+                        """
+                        INSERT INTO candidate_sources (domain, found_on, status, tier_suggestion, citation_count, found_at)
+                        VALUES (%s, %s, COALESCE(%s, 'pending'), %s, COALESCE(%s, 1), NOW())
+                        ON CONFLICT (domain) DO UPDATE SET
+                            found_on = COALESCE(EXCLUDED.found_on, candidate_sources.found_on),
+                            tier_suggestion = COALESCE(EXCLUDED.tier_suggestion, candidate_sources.tier_suggestion),
+                            citation_count = GREATEST(candidate_sources.citation_count, EXCLUDED.citation_count),
+                            status = CASE
+                                WHEN candidate_sources.status IN ('approved', 'rejected') THEN candidate_sources.status
+                                WHEN EXCLUDED.status IS NULL OR EXCLUDED.status = '' THEN candidate_sources.status
+                                ELSE EXCLUDED.status
+                            END
+                        """,
+                        rows,
+                    )
+                    processed = len(rows)
+                    conn.commit()
+        except Exception as e:
+            logger.error(f"Bulk upsert candidate sources failed: {e}")
+            return {"processed": processed, "error": str(e)}
+        return {"processed": processed}
+
+    def get_sync_counts(self) -> Dict[str, int]:
+        out = {"media_sources": 0, "candidate_sources": 0, "news_articles": 0}
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return out
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT COUNT(*) FROM media_sources")
+                    out["media_sources"] = int(cursor.fetchone()[0] or 0)
+                    cursor.execute("SELECT COUNT(*) FROM candidate_sources")
+                    out["candidate_sources"] = int(cursor.fetchone()[0] or 0)
+                    cursor.execute("SELECT COUNT(*) FROM news_articles")
+                    out["news_articles"] = int(cursor.fetchone()[0] or 0)
+        except Exception:
+            return out
+        return out
 
     def save_articles(self, articles: List[Dict[str, Any]]) -> int:
         """

@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "flag-icons": "^7.5.0",
     "maplibre-gl": "^5.16.0",
     "svelte": "^5.47.1"
   }

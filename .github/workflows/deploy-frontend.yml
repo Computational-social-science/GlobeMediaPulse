@@ -32,6 +32,9 @@ jobs:
       - name: Build
         working-directory: ./frontend
         run: npm run build
+        env:
+          VITE_API_URL: https://globe-media-pulse.fly.dev
+          VITE_WS_URL: wss://globe-media-pulse.fly.dev
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4

@@ -47,8 +47,6 @@ export const windowState = writable({
     brain: { visible: false, minimized: false, maximized: false, position: { x: 680, y: 120 } }
 });
 
-export const latestNewsItem = writable(null); // The most recently processed news item, used to trigger reactive updates
-
 // Media Atlas Store
 export const mediaSources = writable([]); // List of all media sources
 

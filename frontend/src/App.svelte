@@ -173,8 +173,9 @@
         constructor() {
             // @ts-expect-error vite env typing
             const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8002';
-            const wsBase = apiBase.replace(/^http/, 'ws');
-            this.url = `${wsBase}/ws`;
+            // @ts-expect-error vite env typing
+            const wsBase = import.meta.env.VITE_WS_URL || apiBase.replace(/^http/, 'ws');
+            this.url = wsBase.endsWith('/ws') ? wsBase : `${wsBase}/ws`;
             console.log(`[WebSocket] Initialized with URL: ${this.url}`);
         }
 
@@ -197,6 +198,8 @@
                 try {
                     const message = JSON.parse(event.data);
                     switch (message.type) {
+                        case 'news':
+                        case 'discovery':
                         case 'news_event': {
                             let article = message.payload;
                             if (typeof article === 'string') {
@@ -205,6 +208,7 @@
                             newsEvents.set(article);
                             break;
                         }
+                        case 'log':
                         case 'log_entry':
                             systemLogs.update(logs => {
                                 const newLogs = [message.payload, ...logs];
@@ -223,6 +227,7 @@
             this.ws.onclose = () => {
                 console.log('⚠️ WebSocket Closed');
                 isConnected.set(false);
+                setOfflineTelemetry();
                 systemStatus.set('OFFLINE');
                 this.ws = null;
                 setTimeout(() => this.connect(), this.reconnectInterval);
@@ -244,6 +249,8 @@
     let isLoading = true;
 
     let activeTab = 'health';
+    let showFlagDiagnostics = false;
+    const flagDiagnosticAlpha2 = ['US', 'CN', 'GB', 'FR', 'DE', 'JP', 'IN', 'BR', 'RU', 'ZA'];
 
     let logContainer: HTMLElement | null = null;
 
@@ -290,11 +297,18 @@
      * Health check with exponential backoff $\Delta t_n=\min(\Delta t_0 2^{n-1}, \Delta t_{max})$.
      * Parameters: $\Delta t_0=5000$ ms, $\Delta t_{max}=60000$ ms.
      */
+    function setOfflineTelemetry() {
+        serviceStatus.set({ postgres: 'unknown', redis: 'unknown' });
+        backendThreadStatus.set({ crawler: 'unknown', analyzer: 'unknown', cleanup: 'unknown' });
+    }
+
     async function checkSystemHealth() {
+        const controller = new AbortController();
+        const abortTimer = setTimeout(() => controller.abort(), 4000);
         try {
             // @ts-expect-error vite env typing
             const apiBase = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
-            const response = await fetch(`${apiBase}/health/full`);
+            const response = await fetch(`${apiBase}/health/full`, { signal: controller.signal });
             if (response.ok) {
                 const data = await response.json();
                 if (data.services) serviceStatus.set(data.services);
@@ -311,14 +325,17 @@
                     retryCount++;
                 }
             } else {
+                setOfflineTelemetry();
                 systemStatus.set('OFFLINE');
                 retryCount++;
             }
         } catch (error) {
             console.warn('Health check failed:', error);
+            setOfflineTelemetry();
             systemStatus.set('OFFLINE');
             retryCount++;
         } finally {
+            clearTimeout(abortTimer);
             setTimeout(() => {
                 isLoading = false;
             }, 500);
@@ -580,6 +597,7 @@
     function getStatusColor(status?: string) {
         if (status === 'ok' || status === 'running' || status === 'active') return 'text-green-400';
         if (status === 'degraded' || status === 'warning') return 'text-yellow-400';
+        if (status === 'disabled' || status === 'unknown') return 'text-gray-400';
         return 'text-red-400';
     }
 
@@ -787,7 +805,7 @@
                                             </button>
                                         </div>
 
-                                        <div class="flex-1 min-h-0 overflow-hidden pr-1 pl-1">
+                                        <div class="flex-1 min-h-0 overflow-hidden overflow-y-hidden pr-1 pl-1">
                                             {#if activeTab === 'health'}
                                                 <div class="h-full overflow-hidden space-y-4">
                                                     <div class="bg-white/5 p-3 rounded border border-white/10">
@@ -841,6 +859,32 @@
                                                                     <span class="font-mono {getStatusColor($backendThreadStatus.cleanup)}">{$backendThreadStatus.cleanup?.toUpperCase() || 'UNK'}</span>
                                                                 </div>
                                                             </div>
+                                                        </div>
+
+                                                        <div class="mt-3">
+                                                            <div class="flex items-center justify-between mb-2">
+                                                                <div class="text-[10px] text-gray-400 font-mono uppercase">Flag Diagnostics</div>
+                                                                <button
+                                                                    class="text-[10px] font-mono px-2 py-1 rounded bg-black/20 border border-white/10 hover:bg-black/30 transition-colors"
+                                                                    on:click={() => showFlagDiagnostics = !showFlagDiagnostics}
+                                                                >
+                                                                    {showFlagDiagnostics ? 'HIDE' : 'SHOW'}
+                                                                </button>
+                                                            </div>
+
+                                                            {#if showFlagDiagnostics}
+                                                                <div class="grid grid-cols-2 gap-2 text-xs">
+                                                                    {#each flagDiagnosticAlpha2 as alpha2 (alpha2)}
+                                                                        <div class="flex items-center justify-between bg-black/20 p-1.5 rounded">
+                                                                            <span class="flex items-center gap-2">
+                                                                                <span class="fi fi-{alpha2.toLowerCase()} gmp-flag opacity-80" aria-label={alpha2}></span>
+                                                                                <span class="font-mono tracking-wider">{alpha2}</span>
+                                                                            </span>
+                                                                            <span class="text-[10px] text-gray-500">fi-{alpha2.toLowerCase()}</span>
+                                                                        </div>
+                                                                    {/each}
+                                                                </div>
+                                                            {/if}
                                                         </div>
                                                     </div>
                                                 </div>
@@ -933,8 +977,8 @@
                                                     </div>
                                                 </div>
                                             {:else if activeTab === 'controls'}
-                                                <div class="flex flex-col h-full gap-2 overflow-hidden" data-testid="system-controls">
-                                                    <div class="bg-white/5 p-1.5 rounded border border-white/10">
+                                                <div class="flex flex-col h-full min-h-0 gap-2 overflow-hidden overflow-y-hidden" data-testid="system-controls">
+                                                    <div class="bg-white/5 p-1.5 rounded border border-white/10 flex-1 min-h-0 overflow-hidden">
                                                         <h4 class="text-neon-pink font-bold text-xs uppercase mb-2 flex items-center gap-2">
                                                             <span class="material-icons-round text-sm">bug_report</span>
                                                             Crawler Control
@@ -961,7 +1005,7 @@
                                                         </div>
                                                     </div>
 
-                                                    <div class="bg-white/5 p-1.5 rounded border border-white/10">
+                                                    <div class="bg-white/5 p-1.5 rounded border border-white/10 flex-1 min-h-0 overflow-hidden">
                                                         <h4 class="text-purple-400 font-bold text-xs uppercase mb-2 flex items-center gap-2">
                                                             <span class="material-icons-round text-sm">health_and_safety</span>
                                                             System Guardian

@@ -38,6 +38,7 @@ RUN apt-get update && \
 
 # Copy source code
 COPY backend ./backend
+COPY data ./data
 
 # Expose port
 EXPOSE 8080

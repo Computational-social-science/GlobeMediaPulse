@@ -7,6 +7,7 @@ from backend.core.database import db_manager
 from backend.core.monitoring import thread_status
 from backend.operators.system.process_manager import process_manager
 from backend.core.config import settings
+from backend.utils.circuit_breaker import postgres_breaker, redis_breaker
 import redis
 
 # Configure Logger
@@ -47,6 +48,9 @@ class SystemGuardianOperator:
         # Redis Connection
         self.redis_url = settings.REDIS_URL
         self._redis_client = None
+        self.last_postgres_error: Optional[str] = None
+        self.last_redis_error: Optional[str] = None
+        self._last_crawler_restart_at: float = 0.0
 
         self._initialized = True
         logger.info("SystemGuardianOperator initialized.")
@@ -97,15 +101,28 @@ class SystemGuardianOperator:
             Dict containing status of 'postgres', 'redis', 'threads', and global 'status'.
         """
         services = await self._check_services_parallel()
-        
-        # Explicitly check process liveness and update thread status
-        if process_manager.is_crawler_running():
+        crawler_running = process_manager.is_crawler_running()
+        if crawler_running:
             thread_status.heartbeat('crawler')
+        else:
+            services["crawler"] = "error"
+            if autoheal:
+                now = time.time()
+                if now - self._last_crawler_restart_at >= 60.0:
+                    try:
+                        process_manager.restart_crawler()
+                        self._last_crawler_restart_at = now
+                        services["crawler"] = "restarting"
+                    except Exception as e:
+                        services["crawler"] = "error"
+                        services["crawler_error"] = str(e)
             
         thread_stats = thread_status.get_status()
         
-        # Determine Global Status
-        is_healthy = services["postgres"] == "ok" and services["redis"] == "ok"
+        postgres_ok = services.get("postgres") in ("ok", "disabled")
+        redis_ok = services.get("redis") in ("ok", "disabled")
+        crawler_ok = services.get("crawler") in ("ok", "restarting")
+        is_healthy = postgres_ok and redis_ok and crawler_ok
         status = "ok" if is_healthy else "degraded"
         
         # Thread Health Logic
@@ -126,6 +143,13 @@ class SystemGuardianOperator:
             "threads": thread_stats,
             "timestamp": time.time()
         }
+        if services.get("postgres") != "ok" or services.get("redis") != "ok":
+            report["service_details"] = {
+                "postgres_error": self.last_postgres_error,
+                "redis_error": self.last_redis_error,
+                "postgres_breaker": postgres_breaker.state.value if hasattr(postgres_breaker, "state") else None,
+                "redis_breaker": redis_breaker.state.value if hasattr(redis_breaker, "state") else None,
+            }
 
         # Circuit Breaker / Self-Healing Logic
         if is_healthy:
@@ -142,7 +166,10 @@ class SystemGuardianOperator:
                 # Re-verify post-healing
                 services = await self._check_services_parallel()
                 report["services"] = services
-                report["status"] = "ok" if services["postgres"] == "ok" and services["redis"] == "ok" else "degraded"
+                postgres_ok2 = services.get("postgres") in ("ok", "disabled")
+                redis_ok2 = services.get("redis") in ("ok", "disabled")
+                crawler_ok2 = services.get("crawler") == "ok"
+                report["status"] = "ok" if postgres_ok2 and redis_ok2 and crawler_ok2 else "degraded"
                 
                 if report["status"] == "ok":
                     self.consecutive_failures = 0
@@ -162,7 +189,8 @@ class SystemGuardianOperator:
         # 1. Heal Postgres
         try:
             logger.info("Healing: Refreshing Database Connection Pool...")
-            # db_manager.engine.dispose() # This would reset the pool
+            db_manager.close()
+            postgres_breaker.reset()
             actions_taken.append("postgres_pool_reset_attempted")
         except Exception as e:
             actions_taken.append(f"postgres_heal_failed: {e}")
@@ -171,6 +199,7 @@ class SystemGuardianOperator:
         try:
             logger.info("Healing: Resetting Redis Client...")
             self._redis_client = None # Force re-creation on next access
+            redis_breaker.reset()
             actions_taken.append("redis_client_reset")
         except Exception as e:
             actions_taken.append(f"redis_heal_failed: {e}")
@@ -193,29 +222,37 @@ class SystemGuardianOperator:
         TIMEOUT = 2.0
 
         async def check_pg():
+            if not settings.DATABASE_URL:
+                return "disabled"
             try:
                 # Use asyncio.to_thread for blocking DB calls
-                return await asyncio.wait_for(
+                ok = await asyncio.wait_for(
                     asyncio.to_thread(self._check_postgres_sync), 
                     timeout=TIMEOUT
                 )
+                return "ok" if ok else "error"
             except Exception:
-                return False
+                return "error"
 
         async def check_redis():
+            if not self.redis_url:
+                return "disabled"
             try:
-                return await asyncio.wait_for(
+                ok = await asyncio.wait_for(
                     asyncio.to_thread(self._check_redis_sync),
                     timeout=TIMEOUT
                 )
+                return "ok" if ok else "error"
             except Exception:
-                return False
+                return "error"
 
-        pg_res, redis_res = await asyncio.gather(check_pg(), check_redis())
+        pg_status, redis_status = await asyncio.gather(check_pg(), check_redis())
+        crawler_status = "ok" if process_manager.is_crawler_running() else "error"
         
         return {
-            "postgres": "ok" if pg_res else "error",
-            "redis": "ok" if redis_res else "error"
+            "postgres": pg_status,
+            "redis": redis_status,
+            "crawler": crawler_status
         }
 
     def _check_postgres_sync(self) -> bool:
@@ -227,6 +264,7 @@ class SystemGuardianOperator:
                 return True
         except Exception as e:
             logger.error(f"Postgres Check Error: {e}")
+            self.last_postgres_error = str(e)
             return False
 
     def _check_redis_sync(self) -> bool:
@@ -234,6 +272,7 @@ class SystemGuardianOperator:
             return self.redis_client.ping()
         except Exception as e:
             logger.error(f"Redis Check Error: {e}")
+            self.last_redis_error = str(e)
             return False
 
 # Global Instance

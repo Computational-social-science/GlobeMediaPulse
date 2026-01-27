@@ -4,6 +4,7 @@
  */
 
 import 'maplibre-gl/dist/maplibre-gl.css' // Import MapLibre GL styles
+import 'flag-icons/css/flag-icons.min.css'
 import './app.css' // Import global application styles
 import App from './App.svelte'
 import { mount } from 'svelte'

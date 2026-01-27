@@ -1,6 +1,7 @@
 import logging
 import requests
 import json
+import os
 from typing import List, Dict, Any, Optional
 
 try:
@@ -63,6 +64,14 @@ class EntityAlignerOperator:
             "south korea": "Q884", "rok": "Q884",
         }
         
+        enabled_env = os.getenv("ENTITY_ALIGNER_ENABLED", "1").strip().lower()
+        if enabled_env in ("0", "false", "no", "off"):
+            logger.info("Entity Alignment disabled by environment.")
+            return
+
+        allow_download_env = os.getenv("ENTITY_ALIGNER_ALLOW_DOWNLOAD", "0").strip().lower()
+        allow_download = allow_download_env in ("1", "true", "yes", "on")
+
         if not spacy:
             logger.warning("SpaCy not installed. Entity Alignment disabled.")
             return
@@ -70,8 +79,12 @@ class EntityAlignerOperator:
         try:
             logger.info(f"Loading NER model: {model_name}...")
             if not spacy.util.is_package(model_name):
-                logger.info(f"Downloading {model_name}...")
-                spacy.cli.download(model_name)
+                if allow_download:
+                    logger.info(f"Downloading {model_name}...")
+                    spacy.cli.download(model_name)
+                else:
+                    logger.warning(f"NER model not installed: {model_name}. Entity Alignment disabled.")
+                    return
             self.nlp = spacy.load(model_name)
             self.enabled = True
         except Exception as e:

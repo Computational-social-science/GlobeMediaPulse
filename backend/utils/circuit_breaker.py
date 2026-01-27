@@ -94,6 +94,11 @@ class CircuitBreaker:
                 logger.warning(f"CircuitBreaker '{self.name}': Threshold reached ({self.failure_count}). Opening circuit.")
                 self.state = CircuitState.OPEN
 
+    def reset(self):
+        self.state = CircuitState.CLOSED
+        self.failure_count = 0
+        self.last_failure_time = 0
+
 class CircuitBreakerOpenException(Exception):
     """Exception raised when a request is blocked by an open circuit breaker."""
     pass

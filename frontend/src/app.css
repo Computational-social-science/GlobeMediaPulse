@@ -64,3 +64,15 @@ body {
 .neon-text-pink {
   text-shadow: 0 0 5px #ff00ff, 0 0 10px #ff00ff;
 }
+
+.gmp-flag {
+  width: 16px;
+  height: 12px;
+  display: inline-block;
+  vertical-align: middle;
+  flex: 0 0 auto;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  border-radius: 1px;
+}

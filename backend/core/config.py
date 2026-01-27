@@ -12,7 +12,15 @@ class Settings(BaseSettings):
     
     # Database Configuration
     # Default to local Postgres instance if not set
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost:5433/globemediapulse")
+    _raw_database_url = os.getenv(
+        "DATABASE_URL",
+        "postgresql://postgres:password@localhost:5433/globemediapulse",
+    )
+    DATABASE_URL: str = (
+        _raw_database_url.replace("postgres://", "postgresql://", 1)
+        if _raw_database_url.startswith("postgres://")
+        else _raw_database_url
+    )
     
     # Redis Configuration
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6380")

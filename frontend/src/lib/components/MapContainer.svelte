@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount, onDestroy, getContext } from 'svelte';
     import { SvelteMap } from 'svelte/reactivity';
-    import { latestNewsItem, mapMode, heatmapEnabled, newsEvents, systemLogs } from '../stores.js';
+    import { mapMode, heatmapEnabled, newsEvents, systemLogs } from '../stores.js';
     import { DATA } from '../data.js';
     import maplibregl from 'maplibre-gl';
 
@@ -74,7 +74,31 @@
     let currentStyle = 'vector';
     
     let updateBuffer: Array<{ item: NewsItem; showEffects: boolean }> = [];
-    let countriesByCode: SvelteMap<string, CountryRecord> = new SvelteMap();
+    const baseCountriesList: CountryRecord[] = Array.isArray((DATA as unknown as { COUNTRIES?: unknown }).COUNTRIES)
+        ? ((DATA as unknown as { COUNTRIES: CountryRecord[] }).COUNTRIES ?? [])
+        : [];
+
+    function cloneCountryMap(source: Map<string, CountryRecord>) {
+        const next: SvelteMap<string, CountryRecord> = new SvelteMap();
+        for (const [k, v] of source) next.set(k, v);
+        return next;
+    }
+
+    const baseCountriesByCode: SvelteMap<string, CountryRecord> = new SvelteMap();
+    const baseCountriesByAlpha2: SvelteMap<string, CountryRecord> = new SvelteMap();
+    for (const entry of baseCountriesList) {
+        if (!entry || !entry.code) continue;
+        const code = String(entry.code).toUpperCase();
+        const normalizedEntry: CountryRecord = { ...entry, code };
+        baseCountriesByCode.set(code, normalizedEntry);
+        if (normalizedEntry.code_alpha2) {
+            const alpha2 = String(normalizedEntry.code_alpha2).toUpperCase();
+            if (alpha2.length === 2) baseCountriesByAlpha2.set(alpha2, normalizedEntry);
+        }
+    }
+
+    let countriesByCode: SvelteMap<string, CountryRecord> = cloneCountryMap(baseCountriesByCode);
+    let countriesByAlpha2: SvelteMap<string, CountryRecord> = cloneCountryMap(baseCountriesByAlpha2);
     let mediaSourcesByDomain: SvelteMap<string, Record<string, unknown>> = new SvelteMap();
     // Allow visualization if Live, Simulating (Playing), or if we are just receiving data stream
     const isVisualizing = true;
@@ -127,12 +151,48 @@
 
     const INITIAL_VIEW: { center: maplibregl.LngLatLike; zoom: number } = { center: [0, 20], zoom: 2 };
 
-    function createNewsCardElement(article: NewsItem) {
+    type LngLatMeta = {
+        countryCode: string | null;
+        source: 'coordinates' | 'latlng' | 'country_center';
+        validationAttempted: boolean;
+        inCountryInitial: boolean;
+        inCountryFinal: boolean;
+        usedFallback: boolean;
+    };
+    type LocalizationSignal = {
+        level: 'high' | 'medium' | 'low';
+        score: number;
+        label: string;
+        accent: string;
+    };
+
+    function computeLocalizationSignal(article: NewsItem, meta: LngLatMeta | null): LocalizationSignal {
+        const rawConfidence = String(
+            (article as Record<string, unknown>).country_confidence ??
+                (article as Record<string, unknown>).confidence ??
+                ''
+        ).toLowerCase();
+
+        const confidenceScore =
+            rawConfidence === 'high' ? 0.9 : rawConfidence === 'medium' ? 0.65 : rawConfidence === 'low' ? 0.35 : 0.5;
+
+        let score = confidenceScore;
+        if (meta?.source === 'country_center') score -= 0.2;
+        if (meta?.usedFallback) score -= 0.25;
+        score = Math.max(0, Math.min(1, score));
+
+        const level: LocalizationSignal['level'] = score >= 0.75 ? 'high' : score >= 0.5 ? 'medium' : 'low';
+        const accent = level === 'high' ? '#22c55e' : level === 'medium' ? '#f59e0b' : '#ef4444';
+        const label = level === 'high' ? 'High' : level === 'medium' ? 'Medium' : 'Low';
+
+        return { level, score, label, accent };
+    }
+
+    function createNewsCardElement(article: NewsItem, meta: LngLatMeta | null = null) {
         const countryCode = article.country_code || article.country || 'UNK';
         const countryData = getCountryByCode(countryCode);
         const countryName = countryData?.name || countryCode;
         const flagCode = countryData?.code_alpha2 || (countryCode.length === 2 ? countryCode : null);
-        const flagUrl = flagCode ? `https://flagcdn.com/w20/${flagCode.toLowerCase()}.png` : null;
         const domain = String(article.source_domain ?? 'Unknown Source');
         const domainKey = domain ? domain.toLowerCase() : null;
         const mediaProfile = domainKey ? mediaSourcesByDomain.get(domainKey) : null;
@@ -151,16 +211,31 @@
         const tierBg = tier === 'T0' ? 'bg-neon-pink/10'
             : tier === 'T1' ? 'bg-neon-blue/10'
                 : 'bg-emerald-400/10';
+        const signal = computeLocalizationSignal(article, meta);
+        const language =
+            typeof (mediaProfile as Record<string, unknown> | null)?.language === 'string'
+                ? String((mediaProfile as Record<string, unknown>).language)
+                : typeof (article as Record<string, unknown>).language === 'string'
+                    ? String((article as Record<string, unknown>).language)
+                    : null;
+        const shortName =
+            typeof (mediaProfile as Record<string, unknown> | null)?.short_name === 'string'
+                ? String((mediaProfile as Record<string, unknown>).short_name)
+                : typeof (mediaProfile as Record<string, unknown> | null)?.abbr === 'string'
+                    ? String((mediaProfile as Record<string, unknown>).abbr)
+                    : null;
 
         const root = document.createElement('div');
-        root.className = 'pointer-events-none select-none relative group news-card-marker';
+        root.className = `pointer-events-none select-none relative group news-card-marker news-card-marker--${signal.level}`;
+        root.style.setProperty('--gmp-accent', signal.accent);
 
         const card = document.createElement('div');
-        card.className = 'relative min-w-[220px] max-w-[280px] bg-[#0a0f1c]/90 backdrop-blur-md border border-white/10 rounded-sm shadow-[0_0_15px_rgba(0,243,255,0.15)] overflow-hidden flex flex-col';
+        card.className =
+            'relative min-w-[240px] max-w-[320px] bg-[#0a0f1c]/90 backdrop-blur-md border border-white/10 rounded-sm shadow-[0_0_18px_rgba(0,0,0,0.35)] overflow-hidden flex flex-col';
         root.appendChild(card);
 
         const accent = document.createElement('div');
-        accent.className = 'absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-neon-blue via-neon-purple to-transparent';
+        accent.className = 'absolute top-0 left-0 w-full h-[2px] news-card-accent';
         card.appendChild(accent);
 
         const header = document.createElement('div');
@@ -171,12 +246,12 @@
         headerLeft.className = 'flex items-center gap-2';
         header.appendChild(headerLeft);
 
-        if (flagUrl) {
-            const flagImg = document.createElement('img');
-            flagImg.src = flagUrl;
-            flagImg.alt = countryCode;
-            flagImg.className = 'w-4 h-auto rounded-[1px] opacity-80';
-            headerLeft.appendChild(flagImg);
+        if (flagCode && String(flagCode).length === 2) {
+            const alpha2 = String(flagCode).toLowerCase();
+            const flagEl = document.createElement('span');
+            flagEl.className = `fi fi-${alpha2} gmp-flag opacity-80`;
+            flagEl.setAttribute('aria-label', alpha2.toUpperCase());
+            headerLeft.appendChild(flagEl);
         }
 
         const countrySpan = document.createElement('span');
@@ -194,7 +269,7 @@
         headerRight.appendChild(tierBadge);
 
         const body = document.createElement('div');
-        body.className = 'p-3 flex items-center gap-3';
+        body.className = 'p-3 flex items-start gap-3';
         card.appendChild(body);
 
         const logoWrap = document.createElement('div');
@@ -228,12 +303,32 @@
         domainSub.textContent = domain;
         info.appendChild(domainSub);
 
-        if (article.title) {
-            const titleEl = document.createElement('p');
-            titleEl.className = 'text-[9px] text-gray-400 line-clamp-2 leading-snug';
-            titleEl.textContent = article.title;
-            info.appendChild(titleEl);
+        const identityRow = document.createElement('div');
+        identityRow.className = 'mt-2 flex items-center gap-2 flex-wrap';
+        info.appendChild(identityRow);
+
+        if (shortName) {
+            const shortEl = document.createElement('span');
+            shortEl.className =
+                'text-[9px] font-bold tracking-wide px-1.5 py-0.5 rounded-[2px] border border-white/10 bg-white/5 text-gray-100';
+            shortEl.textContent = shortName.toUpperCase();
+            identityRow.appendChild(shortEl);
         }
+
+        if (language) {
+            const langEl = document.createElement('span');
+            langEl.className = 'text-[9px] font-mono tracking-wide px-1.5 py-0.5 rounded-[2px] border border-white/10 bg-white/5 text-gray-300';
+            langEl.textContent = language.toUpperCase();
+            identityRow.appendChild(langEl);
+        }
+
+        const siteEl = document.createElement('a');
+        siteEl.className = 'text-[9px] font-mono text-neon-blue/80 underline-offset-2 hover:underline';
+        siteEl.href = String(article.url || `https://${domain}`);
+        siteEl.target = '_blank';
+        siteEl.rel = 'noreferrer';
+        siteEl.textContent = domain;
+        identityRow.appendChild(siteEl);
 
         const footer = document.createElement('div');
         footer.className = 'absolute bottom-0 right-0 p-1 opacity-30';
@@ -247,11 +342,9 @@
     let liveHeatCounts: SvelteMap<string, { count: number; lastUpdated: number }> = new SvelteMap();
     let heatFeatures: PointFeature[] = [];
     let pointFeatures: PointFeature[] = [];
-    let currentMarker: maplibregl.Marker | null = null;
-    let currentMarkerTimeout: ReturnType<typeof setTimeout> | null = null;
-    let currentPopup: maplibregl.Popup | null = null;
     let scanMarker: maplibregl.Marker | null = null;
     let scanLabelMarker: maplibregl.Marker | null = null;
+    let scanLabelMarkerTimeout: ReturnType<typeof setTimeout> | null = null;
     let serverMarker: maplibregl.Marker | null = null;
     const countryPolygonsByCode: SvelteMap<string, Array<Array<[number, number]>>> = new SvelteMap();
 
@@ -418,14 +511,6 @@
         return { anchor: point.y > height / 2 ? 'bottom-left' : 'top-left', offset: [12, point.y > height / 2 ? -12 : 12] };
     }
 
-    function resolveCoordinates(article: NewsItem): [number, number] | null {
-        const normalized = {
-            ...article,
-            country_code: getItemCountryCode(article) || undefined
-        };
-        return resolveLngLat(normalized);
-    }
-
     function handleNewsEvent(article: NewsItem) {
         // Logic Linkage: Even if health check failed, if we receive WS events, we are effectively online.
         // if ($systemStatus === 'OFFLINE') return; // DISABLED for robustness
@@ -438,7 +523,6 @@
         }
 
         if (!mapLoaded || !map) return;
-        const mapRef = map;
         
         // Throttle Logic
         const now = Date.now();
@@ -450,55 +534,7 @@
         // Play Sound
         soundManager.playDataChirp();
 
-        const coords = resolveCoordinates(article);
-        if (coords) {
-            if (scanLabelMarker) scanLabelMarker.remove();
-
-            const point = mapRef.project(coords);
-            const width = mapRef.getCanvas().width;
-            const height = mapRef.getCanvas().height;
-            const { anchor, offset } = getSmartAnchor(point, width, height);
-
-            const labelEl = createNewsCardElement(article);
-
-            scanLabelMarker = new maplibregl.Marker({
-                element: labelEl,
-                anchor: anchor,
-                offset: offset
-            })
-            .setLngLat(coords)
-            .addTo(mapRef);
-
-            setTimeout(() => {
-                if (scanLabelMarker) {
-                    scanLabelMarker.remove();
-                    scanLabelMarker = null;
-                }
-            }, 6000);
-            
-            const feature: PointFeature = {
-                type: 'Feature',
-                geometry: { type: 'Point', coordinates: coords },
-                properties: { ...article, timestamp: now }
-            };
-            
-            pointFeatures.push(feature);
-            if (pointFeatures.length > 2000) pointFeatures.shift(); // Keep buffer manageable
-            
-            ensureSource(SOURCES.points, pointFeatures);
-
-            const countryCode = getItemCountryCode(article);
-            if (countryCode) {
-                bumpHeatCount(countryCode, 1, now);
-                refreshHeatSource(now);
-            }
-
-        } else {
-             console.warn(`[Visualization] Skipped article from ${article.country}: No coordinates.`);
-        }
-
         pulseServer();
-
         addItem(article);
     }
 
@@ -589,8 +625,24 @@
         map = mapInstance;
 
         const isDev = Boolean((import.meta as { env?: { DEV?: boolean } }).env?.DEV);
-        if (isDev) {
-            (window as Window & { map?: maplibregl.Map }).map = mapInstance;
+        const shouldExposeMap =
+            isDev ||
+            (typeof navigator !== 'undefined' &&
+                Boolean((navigator as Navigator & { webdriver?: boolean }).webdriver)) ||
+            window.location.hostname === 'localhost';
+        if (shouldExposeMap) {
+            type SpellAtlasWindow = Window & {
+                map?: maplibregl.Map;
+                __createNewsCardElement?: (article: NewsItem) => HTMLElement;
+                __emitNewsEvent?: (article: NewsItem) => void;
+            };
+            const w = window as SpellAtlasWindow;
+            w.map = mapInstance;
+            w.__createNewsCardElement = (article) => createNewsCardElement(article);
+            w.__emitNewsEvent = (article) => {
+                lastEventTime = 0;
+                handleNewsEvent(article);
+            };
         }
 
         // Ensure strict window adaptation
@@ -634,8 +686,9 @@
 
     onDestroy(() => {
         if (map) map.remove();
-        if (currentMarkerTimeout) clearTimeout(currentMarkerTimeout);
         if (scanMarker) scanMarker.remove();
+        if (scanLabelMarker) scanLabelMarker.remove();
+        if (scanLabelMarkerTimeout) clearTimeout(scanLabelMarkerTimeout);
         if (serverMarker) serverMarker.remove();
     });
 
@@ -645,10 +698,11 @@
     async function loadCountries() {
         try {
             const apiBase =
-                (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ||
+                (import.meta as { env?: { VITE_API_URL?: string; VITE_API_BASE_URL?: string } }).env?.VITE_API_URL ||
+                (import.meta as { env?: { VITE_API_URL?: string; VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL ||
                 (window.location.hostname === 'localhost'
-                    ? 'http://localhost:8000'
-                    : 'https://spellatlas-backend-production.fly.dev');
+                    ? 'http://localhost:8002'
+                    : 'https://globe-media-pulse.fly.dev');
             
             const response = await fetch(`${apiBase}/api/metadata/geojson`);
             const geoData = await response.json();
@@ -701,31 +755,39 @@
                         'interpolate',
                         ['linear'],
                         ['zoom'],
-                        1, 0.7,
-                        4, 1.0,
-                        7, 1.3,
-                        10, 1.6
+                        1, 0.55,
+                        4, 0.8,
+                        7, 1.05,
+                        10, 1.25
                     ],
                     'heatmap-radius': [
                         'interpolate',
                         ['linear'],
                         ['zoom'],
-                        1, 8,
-                        4, 16,
-                        7, 28,
-                        10, 40
+                        1, 10,
+                        4, 18,
+                        7, 30,
+                        10, 42
                     ],
-                    'heatmap-opacity': 0.7,
+                    'heatmap-opacity': [
+                        'interpolate',
+                        ['linear'],
+                        ['zoom'],
+                        1, 0.55,
+                        4, 0.65,
+                        7, 0.72,
+                        10, 0.78
+                    ],
                     'heatmap-color': [
                         'interpolate',
                         ['linear'],
                         ['heatmap-density'],
                         0, 'rgba(0,0,0,0)',
-                        0.2, '#440154',
-                        0.4, '#3b528b',
-                        0.6, '#21918c',
-                        0.8, '#5ec962',
-                        1.0, '#fde725'
+                        0.2, 'rgba(68, 1, 84, 0.35)',
+                        0.4, 'rgba(59, 82, 139, 0.55)',
+                        0.6, 'rgba(33, 145, 140, 0.65)',
+                        0.8, 'rgba(94, 201, 98, 0.75)',
+                        1.0, 'rgba(253, 231, 37, 0.9)'
                     ]
                 }
             });
@@ -956,6 +1018,19 @@
             const source = mapRef.getSource(SOURCES.countries) as maplibregl.GeoJSONSource | undefined;
             if (source) source.setData(geojsonData);
         }
+
+        if (!mapRef.getLayer(LAYERS.countries) && mapRef.getSource(SOURCES.countries)) {
+            mapRef.addLayer({
+                id: LAYERS.countries,
+                type: 'fill',
+                source: SOURCES.countries,
+                paint: {
+                    'fill-color': '#e2e8f0',
+                    'fill-outline-color': '#94a3b8',
+                    'fill-opacity': 0.5
+                }
+            });
+        }
     }
 
     /**
@@ -1074,16 +1149,24 @@
                 list = Object.values(payloadObj) as CountryRecord[];
             }
         }
-        const next: SvelteMap<string, CountryRecord> = new SvelteMap();
+        const next: SvelteMap<string, CountryRecord> = cloneCountryMap(baseCountriesByCode);
+        const nextAlpha2: SvelteMap<string, CountryRecord> = cloneCountryMap(baseCountriesByAlpha2);
         for (const entry of list) {
             if (!entry || !entry.code) continue;
             const code = String(entry.code).toUpperCase();
-            next.set(code, {
-                ...entry,
-                code
-            });
+            const existing = next.get(code);
+            const normalizedEntry: CountryRecord = { ...entry, code };
+            if (!normalizedEntry.code_alpha2 && existing?.code_alpha2) {
+                normalizedEntry.code_alpha2 = existing.code_alpha2;
+            }
+            next.set(code, normalizedEntry);
+            if (normalizedEntry.code_alpha2) {
+                const alpha2 = String(normalizedEntry.code_alpha2).toUpperCase();
+                if (alpha2.length === 2) nextAlpha2.set(alpha2, normalizedEntry);
+            }
         }
         countriesByCode = next;
+        countriesByAlpha2 = nextAlpha2;
     }
 
     function applyMediaSourcesPayload(payload: unknown) {
@@ -1102,9 +1185,10 @@
     function getCountryByCode(code: string): CountryRecord | null {
         if (!code) return null;
         const normalized = String(code).toUpperCase();
-        const fromApi = countriesByCode.get(normalized);
-        if (fromApi) return fromApi;
-        return DATA.COUNTRIES.find((c) => c.code === normalized) || null;
+        if (normalized.length === 2) {
+            return countriesByAlpha2.get(normalized) || null;
+        }
+        return countriesByCode.get(normalized) || null;
     }
 
     /**
@@ -1123,34 +1207,52 @@
      * Validates against country boundaries and falls back to country center.
      * @param {any} item - The data item.
      */
-    function resolveLngLat(item: NewsItem): [number, number] | null {
+    function resolveLngLatWithMeta(item: NewsItem): { position: [number, number] | null; meta: LngLatMeta | null } {
         const countryCode = getItemCountryCode(item);
-        let position = toLngLat(item?.coordinates);
-        if (!position) {
-            position = toLngLat({ lng: item?.lng, lat: item?.lat });
-        }
-        if (!position && countryCode) {
-            position = getCalibratedLngLat(countryCode);
-        }
-        if (!position) {
-             return null;
-        }
-        const safePosition = position;
+        const fromCoordinates = toLngLat(item?.coordinates);
+        const fromLatLng = fromCoordinates ? null : toLngLat({ lng: item?.lng, lat: item?.lat });
+        const fromCenter = fromCoordinates || fromLatLng ? null : countryCode ? getCalibratedLngLat(countryCode) : null;
+
+        const source: LngLatMeta['source'] = fromCoordinates
+            ? 'coordinates'
+            : fromLatLng
+                ? 'latlng'
+                : 'country_center';
+
+        let position = fromCoordinates ?? fromLatLng ?? fromCenter;
+        if (!position) return { position: null, meta: null };
 
         const canValidateCountry =
-            countryCode &&
+            Boolean(countryCode) &&
             countryPolygonsByCode.size > 0 &&
-            countryPolygonsByCode.has(countryCode);
-        
-        if (canValidateCountry && safePosition && !isPointInCountry(safePosition, countryCode)) {
+            (countryCode ? countryPolygonsByCode.has(countryCode) : false);
+
+        const inCountryInitial = canValidateCountry && countryCode ? isPointInCountry(position, countryCode) : false;
+        let usedFallback = false;
+        if (canValidateCountry && countryCode && !inCountryInitial) {
             const fallback = getCalibratedLngLat(countryCode);
-            if (fallback) position = fallback;
+            if (fallback) {
+                position = fallback;
+                usedFallback = true;
+            }
         }
-        const finalPosition = position;
-        if (!canValidateCountry && Math.abs(finalPosition[0]) < 1 && Math.abs(finalPosition[1]) < 1) {
-            return null;
+        const inCountryFinal = canValidateCountry && countryCode ? isPointInCountry(position, countryCode) : false;
+
+        if (!canValidateCountry && Math.abs(position[0]) < 1 && Math.abs(position[1]) < 1) {
+            return { position: null, meta: null };
         }
-        return finalPosition;
+
+        return {
+            position,
+            meta: {
+                countryCode,
+                source,
+                validationAttempted: canValidateCountry,
+                inCountryInitial,
+                inCountryFinal,
+                usedFallback
+            }
+        };
     }
 
     /**
@@ -1190,7 +1292,8 @@
         const lastItemIndex = batch.length - 1;
 
         batch.forEach(({ item, showEffects }, index) => {
-            const position = resolveLngLat(item);
+            const resolved = resolveLngLatWithMeta(item);
+            const position = resolved.position;
             if (!position) return;
 
             const featureId = `${item.id || item.timestamp || Date.now()}-${Math.random()}`;
@@ -1221,7 +1324,7 @@
             const isLast = index === lastItemIndex;
             
             if (showEffects && isLast) {
-                updateVisualEffects(position, item, isError);
+                updateVisualEffects(position, item, resolved.meta);
             }
 
             hasUpdates = true;
@@ -1241,74 +1344,53 @@
      * @param {any} item
      * @param {any} isError
      */
-    function updateVisualEffects(position: [number, number], item: NewsItem, isError: boolean) {
-        // Scan Marker (Cyan Dot)
+    function updateVisualEffects(position: [number, number], item: NewsItem, meta: LngLatMeta | null) {
         if (!map) return;
         const mapRef = map;
+        const signal = computeLocalizationSignal(item, meta);
         if (!scanMarker) {
             const el = document.createElement('div');
-            el.className = 'scan-marker';
+            el.className = `scan-marker scan-marker--${signal.level}`;
             scanMarker = new maplibregl.Marker({ element: el })
                 .setLngLat(position)
                 .addTo(mapRef);
         } else {
             scanMarker.setLngLat(position);
+            const el = scanMarker.getElement();
+            el.classList.remove('scan-marker--high', 'scan-marker--medium', 'scan-marker--low');
+            el.classList.add(`scan-marker--${signal.level}`);
         }
 
-        // Pulse / Popup for Errors
-        if (isError) {
-            if (currentMarker) currentMarker.remove();
-            if (currentPopup) currentPopup.remove();
-            if (currentMarkerTimeout) clearTimeout(currentMarkerTimeout);
-            
-            const el = document.createElement('div');
-            el.className = 'pulse-marker';
-            
-            currentMarker = new maplibregl.Marker({ element: el })
-                .setLngLat(position)
-                .addTo(mapRef);
-
-            // Format timestamp for popup (Full Date + Time)
-            const dateObj = item.timestamp ? new Date(item.timestamp) : new Date();
-            const timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const dateStr = dateObj.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
-            const timestampDisplay = `${dateStr} ${timeStr}`;
-
-            const headline = item.headline || 'No Headline';
-
-            const popupContent = `
-                <div class="font-tech p-2 min-w-[200px]">
-                    <div class="flex justify-between items-center mb-2 border-b border-white/20 pb-1">
-                        <span class="text-neon-blue font-bold">${item.country_name || ''}</span>
-                        <span class="text-xs text-gray-400">${timestampDisplay}</span>
-                    </div>
-                    <div class="text-sm mb-2 text-white">"${headline}"</div>
-                    <div class="bg-red-900/30 border border-red-500/50 p-2 rounded text-xs">
-                        <div class="text-red-400 font-bold">DETECTED ERROR</div>
-                        <div>Word: <span class="text-white">${item.error_details?.word || 'Unknown'}</span></div>
-                        <div>Correct: <span class="text-green-400">${item.error_details?.suggestion || 'Unknown'}</span></div>
-                    </div>
-                </div>
-            `;
-
-            currentPopup = new maplibregl.Popup({
-                closeButton: false,
-                closeOnClick: false,
-                className: 'neon-popup',
-                maxWidth: '300px',
-                offset: 25
-            })
-                .setLngLat(position)
-                .setHTML(popupContent)
-                .addTo(mapRef);
-
-            currentMarkerTimeout = setTimeout(() => {
-                if (currentMarker) currentMarker.remove();
-                if (currentPopup) currentPopup.remove();
-                currentMarker = null;
-                currentPopup = null;
-            }, 5000);
+        if (scanLabelMarker) {
+            scanLabelMarker.remove();
+            scanLabelMarker = null;
         }
+        if (scanLabelMarkerTimeout) {
+            clearTimeout(scanLabelMarkerTimeout);
+            scanLabelMarkerTimeout = null;
+        }
+
+        const point = mapRef.project(position);
+        const width = mapRef.getCanvas().width;
+        const height = mapRef.getCanvas().height;
+        const { anchor, offset } = getSmartAnchor(point, width, height);
+        const labelEl = createNewsCardElement(item, meta);
+
+        scanLabelMarker = new maplibregl.Marker({
+            element: labelEl,
+            anchor: anchor,
+            offset: offset
+        })
+            .setLngLat(position)
+            .addTo(mapRef);
+
+        scanLabelMarkerTimeout = setTimeout(() => {
+            if (scanLabelMarker) {
+                scanLabelMarker.remove();
+                scanLabelMarker = null;
+            }
+            scanLabelMarkerTimeout = null;
+        }, 6000);
     }
 
     $: if (map && $mapMode && $mapMode !== currentStyle) {
@@ -1323,19 +1405,6 @@
         }
     }
 
-    $: if ($latestNewsItem && map && isVisualizing) {
-        const rawItem = $latestNewsItem as NewsItem;
-        // Normalize item structure to ensure map compatibility
-        const item = {
-            ...rawItem,
-            country_code: rawItem.country_code || rawItem.country || rawItem.countryCode || undefined,
-            headline: rawItem.headline || rawItem.title,
-            has_error: rawItem.has_error || (rawItem.errors && rawItem.errors.length > 0),
-            error_details: rawItem.error_details || (rawItem.errors && rawItem.errors.length > 0 ? rawItem.errors[0] : null)
-        };
-        addItem(item);
-    }
-
     // Toggle Live Layers visibility based on mode
     $: if (map && mapLoaded) {
         const liveVisibility = isVisualizing ? 'visible' : 'none';
@@ -1343,17 +1412,17 @@
 
         // Clear live markers when switching to historical mode
         if (!isVisualizing) {
-            if (currentMarker) {
-                currentMarker.remove();
-                currentMarker = null;
-            }
-            if (currentPopup) {
-                currentPopup.remove();
-                currentPopup = null;
-            }
             if (scanMarker) {
                 scanMarker.remove();
                 scanMarker = null;
+            }
+            if (scanLabelMarker) {
+                scanLabelMarker.remove();
+                scanLabelMarker = null;
+            }
+            if (scanLabelMarkerTimeout) {
+                clearTimeout(scanLabelMarkerTimeout);
+                scanLabelMarkerTimeout = null;
             }
         }
     }
@@ -1361,6 +1430,24 @@
 </script>
 
 <div class="absolute top-0 left-0 w-full h-full" bind:this={mapElement}></div>
+{#if $heatmapEnabled}
+    <div class="absolute bottom-4 left-4 z-[60] pointer-events-none">
+        <div class="bg-black/60 backdrop-blur-md border border-white/10 rounded px-3 py-2 text-white max-w-[320px]">
+            <div class="flex items-center justify-between gap-3">
+                <div class="text-[10px] font-semibold tracking-wide">Heatmap: Activity Intensity</div>
+                <div class="text-[9px] text-gray-300 font-mono">I = log(1 + c) / log(1 + c_max)</div>
+            </div>
+            <div class="mt-2 h-2 rounded heatmap-legend-gradient"></div>
+            <div class="mt-1 flex justify-between text-[9px] text-gray-300 font-mono">
+                <span>Low</span>
+                <span>High</span>
+            </div>
+            <div class="mt-1 text-[9px] text-gray-400 leading-snug">
+                Country-level kernel density from merged baseline + live stream; logarithmic normalization preserves rank under heavy-tailed counts.
+            </div>
+        </div>
+    </div>
+{/if}
 
 
 
@@ -1377,27 +1464,48 @@
         border-top-color: rgba(10, 10, 31, 0.9);
     }
 
-    :global(.pulse-marker) {
-        width: 20px;
-        height: 20px;
-        background: rgba(255, 255, 0, 0.4); /* Yellow for Alert */
-        border: 2px solid #ffff00;
-        border-radius: 50%;
-        box-shadow: 0 0 15px #ffff00, inset 0 0 10px #ffff00;
-        cursor: pointer;
-        animation: pulse 1.0s infinite; /* Faster pulse for urgency */
-        position: relative;
-        z-index: 1000;
-    }
-    
     :global(.scan-marker) {
         width: 12px;
         height: 12px;
-        background: #00f3ff;
-        border: 2px solid white;
+        background: #22c55e;
+        border: 2px solid rgba(255, 255, 255, 0.95);
         border-radius: 50%;
-        box-shadow: 0 0 10px #00f3ff;
-        transition: all 0.5s ease-out;
+        box-shadow: 0 0 10px rgba(34, 197, 94, 0.85);
+        transition: background 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out;
+        position: relative;
+        z-index: 80;
+    }
+
+    :global(.scan-marker.scan-marker--high) {
+        background: #22c55e;
+        box-shadow: 0 0 10px rgba(34, 197, 94, 0.85);
+        transform: scale(1);
+    }
+    :global(.scan-marker.scan-marker--medium) {
+        background: #f59e0b;
+        box-shadow: 0 0 10px rgba(245, 158, 11, 0.8);
+        transform: scale(1.05);
+    }
+    :global(.scan-marker.scan-marker--low) {
+        background: #ef4444;
+        box-shadow: 0 0 12px rgba(239, 68, 68, 0.85);
+        transform: scale(1.1);
+    }
+
+    :global(.news-card-accent) {
+        background: linear-gradient(90deg, var(--gmp-accent, #00f3ff) 0%, rgba(0, 0, 0, 0) 100%);
+        opacity: 0.95;
+    }
+
+    :global(.heatmap-legend-gradient) {
+        background: linear-gradient(
+            90deg,
+            rgba(68, 1, 84, 0.35) 0%,
+            rgba(59, 82, 139, 0.55) 25%,
+            rgba(33, 145, 140, 0.65) 50%,
+            rgba(94, 201, 98, 0.75) 75%,
+            rgba(253, 231, 37, 0.9) 100%
+        );
     }
 
     :global(.server-marker) {
@@ -1420,26 +1528,4 @@
         100% { transform: scale(1); box-shadow: 0 0 15px #22d3ee; filter: brightness(1); }
     }
 
-    :global(.neon-popup .maplibregl-popup-content) {
-        background: rgba(5, 5, 10, 0.9);
-        border: 1px solid #00f3ff;
-        box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
-        border-radius: 4px;
-        padding: 0;
-        color: white;
-    }
-
-    :global(.neon-popup .maplibregl-popup-tip) {
-        border-top-color: #00f3ff;
-    }
-
-    :global(.pulse-marker:hover) {
-        opacity: 1;
-    }
-
-    @keyframes pulse {
-        0% { transform: scale(1); opacity: 1; }
-        70% { transform: scale(3); opacity: 0; }
-        100% { transform: scale(1); opacity: 0; }
-    }
 </style>

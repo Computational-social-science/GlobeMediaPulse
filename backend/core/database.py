@@ -145,15 +145,21 @@ class DatabaseManager:
             yield None
             return
 
+        close_on_return = False
         try:
             yield conn
             postgres_breaker.record_success()
         except Exception as e:
+            close_on_return = True
             postgres_breaker.record_failure()
             raise e
         finally:
             if conn:
-                pool.putconn(conn)
+                try:
+                    conn_closed = bool(getattr(conn, "closed", False))
+                except Exception:
+                    conn_closed = False
+                pool.putconn(conn, close=close_on_return or conn_closed)
 
     def get_db(self):
         db = SessionLocal()

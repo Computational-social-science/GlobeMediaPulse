@@ -7,6 +7,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import redis.asyncio as redis
+import os
 
 from backend.core.database import db_manager
 from backend.api.endpoints import router as api_router
@@ -18,43 +19,99 @@ from backend.operators.system.guardian import system_guardian
 from backend.operators.system.process_manager import process_manager
 from backend.core.logging_handlers import ws_log_handler
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-# Add WebSocket Log Handler
 logging.getLogger().addHandler(ws_log_handler)
 
-# Global instances
-# db_manager is already a singleton imported from core.database
+def _to_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+def _to_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        s = str(value).strip()
+        return s if s else None
+    except Exception:
+        return None
+
+def _normalize_ws_event(payload: Any) -> tuple[str, Dict[str, Any]] | None:
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        title = _to_str(payload)
+        if not title:
+            return None
+        return ("news", {"type": "news", "title": title, "country_code": "UNK", "source_domain": "unknown"})
+
+    event_type = _to_str(payload.get("type")) or "news"
+    if event_type not in ("news", "discovery", "log"):
+        event_type = "news"
+
+    if event_type == "log":
+        normalized = {k: v for k, v in payload.items() if k != "type"}
+        ts = _to_float(normalized.get("timestamp"))
+        if ts is None:
+            ts = _to_float(payload.get("timestamp"))
+        if ts is not None:
+            normalized["timestamp"] = ts
+        return ("log", normalized)
+
+    country_code = _to_str(payload.get("country_code")) or _to_str(payload.get("country")) or _to_str(payload.get("countryCode")) or "UNK"
+    country_code = country_code.upper()
+    tier = _to_str(payload.get("tier")) or ("Candidate" if event_type == "discovery" else "Tier-2")
+    language = _to_str(payload.get("language")) or "en"
+    source_domain = _to_str(payload.get("source_domain")) or _to_str(payload.get("domain"))
+    if source_domain:
+        source_domain = source_domain.lower()
+    title = _to_str(payload.get("title")) or _to_str(payload.get("headline")) or "Untitled"
+    url = _to_str(payload.get("url"))
+    lat = _to_float(payload.get("lat"))
+    lng = _to_float(payload.get("lng"))
+    ts = _to_float(payload.get("timestamp"))
+
+    normalized = {
+        "type": event_type,
+        "title": title,
+        "url": url,
+        "source_domain": source_domain or "unknown",
+        "source_name": _to_str(payload.get("source_name")),
+        "tier": tier,
+        "language": language,
+        "country_code": country_code,
+        "confidence": _to_str(payload.get("confidence")),
+        "lat": lat,
+        "lng": lng,
+        "timestamp": ts,
+        "logo_url": _to_str(payload.get("logo_url")),
+    }
+    return (event_type, normalized)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Lifecycle manager for the FastAPI application.
-
-    The lifecycle enforces global orchestration with explicit supervision
-    $\mathcal{G}=\{\text{init},\text{monitor},\text{heal}\}$ to minimize
-    cascading failures $P_f$ under concurrent workloads.
-    """
-    # Startup Phase
     logger.info("Starting Globe Media Pulse Backend System...")
     
-    # Execute Initialization Pipeline
     init_pipeline.run()
     
-    # Launch System Guardian (Background Daemon)
     asyncio.create_task(system_guardian.start_daemon())
     
-    # Launch Periodic Cleanup Task (Background Daemon)
     asyncio.create_task(periodic_cleanup_task())
 
-    # Launch Redis Event Listener (Data Flow Bridge)
     asyncio.create_task(redis_event_listener())
     
-    # Start Crawler Process (Managed by ProcessManager)
-    process_manager.start_crawler()
+    auto_start_crawler = os.getenv("AUTO_START_CRAWLER", "1").strip().lower() not in ("0", "false", "no", "off")
+    crawler_region = os.getenv("CRAWLER_REGION", "").strip().lower()
+    fly_region = os.getenv("FLY_REGION", "").strip().lower()
+    if crawler_region and fly_region and fly_region != crawler_region:
+        auto_start_crawler = False
+    if auto_start_crawler:
+        process_manager.start_crawler()
 
-    # Audit Routes
     for route in app.routes:
         methods = getattr(route, "methods", None)
         logger.info(f"Registered Route: {route.path} {methods}")
@@ -67,14 +124,7 @@ async def lifespan(app: FastAPI):
     db_manager.close()
 
 async def periodic_cleanup_task():
-    """
-    Background Daemon: Periodic Resource Cleanup.
-    Runs every 2 hours (7200 seconds).
-
-    Cleanup cadence follows $\Delta t=7200$ s to cap resource drift
-    and keep disk usage under the threshold $\Omega$.
-    """
-    CLEANUP_INTERVAL = 7200 # 2 hours
+    CLEANUP_INTERVAL = 7200
     logger.info("Periodic Resource Cleanup Daemon Started.")
     thread_status.heartbeat('cleanup')
     
@@ -89,12 +139,6 @@ async def periodic_cleanup_task():
             await asyncio.sleep(60)
 
 async def redis_event_listener():
-    """
-    Background Task: Listens to Redis 'news_pulse' channel and broadcasts to WebSockets.
-
-    This task is the data-flow bridge $B:\text{Redis}\rightarrow\text{WebSocket}$
-    that preserves event order to reduce temporal skew $\delta t$.
-    """
     from backend.core.config import settings
     redis_url = settings.REDIS_URL
     
@@ -112,24 +156,15 @@ async def redis_event_listener():
                         data_str = message["data"].decode("utf-8")
                         try:
                             payload = json.loads(data_str)
-                            # Smart Routing based on payload 'type'
-                            if isinstance(payload, dict) and payload.get("type") == "log":
-                                await ws_manager.broadcast({
-                                    "type": "log_entry",
-                                    "payload": payload
-                                })
-                            else:
-                                # Default to news_event
-                                await ws_manager.broadcast({
-                                    "type": "news_event",
-                                    "payload": payload
-                                })
+                            normalized = _normalize_ws_event(payload)
+                            if normalized:
+                                out_type, out_payload = normalized
+                                await ws_manager.broadcast({"type": out_type, "payload": out_payload})
                         except json.JSONDecodeError:
-                            # If not JSON, send as raw text payload
-                            await ws_manager.broadcast({
-                                "type": "news_event",
-                                "payload": data_str
-                            })
+                            normalized = _normalize_ws_event(data_str)
+                            if normalized:
+                                out_type, out_payload = normalized
+                                await ws_manager.broadcast({"type": out_type, "payload": out_payload})
                     except Exception as e:
                         logger.error(f"Error broadcasting redis event: {e}")
                 
@@ -140,10 +175,20 @@ async def redis_event_listener():
 app = FastAPI(title="Globe Media Pulse API", lifespan=lifespan)
 
 # CORS Configuration
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()] or [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:4173",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:4173",
+]
+allow_credentials = "*" not in allowed_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allow all origins for dev
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -152,10 +197,6 @@ app.include_router(api_router, prefix="/api")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """
-    WebSocket ingress for streaming updates with bounded reconnect delay
-    $\Delta t=5\text{s}$ configured client-side.
-    """
     await ws_manager.connect(websocket)
     try:
         while True:
@@ -165,16 +206,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/health/full")
 async def health_full(autoheal: bool = False) -> Dict[str, Any]:
-    """
-    Global health endpoint with optional autoheal action $a\in\{0,1\}$.
-    """
     return await system_guardian.check_health(autoheal=autoheal)
 
 @app.post("/health/autoheal")
 async def autoheal() -> Dict[str, Any]:
-    """
-    Trigger autohealing to restore system stability and reduce $P_f$.
-    """
     report = await system_guardian.auto_heal()
     status = await system_guardian.check_health(autoheal=False)
     status["self_heal"] = report
@@ -182,9 +217,6 @@ async def autoheal() -> Dict[str, Any]:
 
 @app.get("/")
 def read_root() -> Dict[str, str]:
-    """
-    Root endpoint for fast liveness probes $t \rightarrow 0$.
-    """
     return {
         "status": "online",
         "system": "Globe Media Pulse V1.0"
