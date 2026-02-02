@@ -24,7 +24,7 @@ export const mapState = writable({
 });
 
 export const mapIdleTimeout = writable(0);
-export const mapCommand = writable({ nonce: 0, type: null });
+export const mapCommand = writable({ nonce: 0, type: '' });
 export const mediaProfileStats = writable({ total: 0, hit: 0, rate: 0 });
 
 // Simulation Time Control
