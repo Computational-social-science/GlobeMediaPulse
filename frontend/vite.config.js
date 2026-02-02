@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [svelte()],
   base: './', // Use relative paths for GitHub Pages
   server: {
-    host: true,
+    host: '0.0.0.0',
     port: 5173,
     strictPort: true
   },
