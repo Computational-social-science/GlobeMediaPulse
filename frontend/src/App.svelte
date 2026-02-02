@@ -900,7 +900,7 @@
         </section>
 
         <aside
-            class="absolute inset-y-0 left-0 z-[200] min-h-0 sidebar-shell shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] overflow-hidden"
+            class="absolute inset-y-0 left-0 z-[200] min-h-0 sidebar-shell sidebar-theme shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] overflow-hidden"
             style="width: {sidebarCollapsed ? '56px' : '320px'};"
             on:mouseenter={() => setSidebarHovering(true)}
             on:mouseleave={() => setSidebarHovering(false)}
@@ -931,7 +931,7 @@
                                     <span class="w-6 h-6 rounded sidebar-panel-sub border sidebar-border flex items-center justify-center sidebar-text shrink-0">
                                         <span class="material-icons-round text-[16px]">public</span>
                                     </span>
-                                    <div class="text-xs font-semibold tracking-wide truncate">Globe Media Pulse</div>
+                                    <div class="text-xs font-semibold tracking-wide truncate sidebar-text">Globe Media Pulse</div>
                                 </div>
                             </div>
                         {/if}
@@ -1032,7 +1032,7 @@
                         <div class="mx-1 mb-1 rounded sidebar-panel-soft border sidebar-border overflow-hidden">
                             <div class="h-9 px-2 flex items-center gap-2 border-b sidebar-border">
                                 <span class="material-icons-round text-[18px] sidebar-icon-muted">diversity_3</span>
-                                <div class="text-xs font-semibold">Geographic Diversity Entropy</div>
+                                <div class="text-xs font-semibold sidebar-text">Geographic Diversity Entropy</div>
                             </div>
                             <div class="p-3 text-[11px] sidebar-text-dim space-y-2">
                                 <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
@@ -1171,7 +1171,7 @@
                         <div class="mx-1 mb-1 rounded sidebar-panel-soft border sidebar-border overflow-hidden">
                             <div class="h-9 px-2 flex items-center gap-2 border-b sidebar-border">
                                 <span class="material-icons-round text-[18px] sidebar-icon-muted">health_and_safety</span>
-                                <div class="text-xs font-semibold">Health</div>
+                                <div class="text-xs font-semibold sidebar-text">Health</div>
                                 <div class="ml-auto flex items-center gap-2">
                                     <button
                                         type="button"
