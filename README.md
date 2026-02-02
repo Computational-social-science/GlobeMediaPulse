@@ -43,7 +43,7 @@ To ensure data integrity and robust source identification:
 
 ## 3. System Architecture
 
-The project adopts a **Hybrid Cloud/Local** architecture designed for resilience and scalability.
+The project adopts a **static-first, zero-cost** architecture for durable publishing, with an optional local full-stack mode for research development.
 
 ### 3.1 Backend Core (`/backend`)
 *   **Framework**: FastAPI (Python 3.11+) for high-performance async orchestration.
@@ -59,11 +59,13 @@ The project adopts a **Hybrid Cloud/Local** architecture designed for resilience
 *   **Geospatial Analysis**: Interactive global maps rendering media density and event hotspots.
 
 ### 3.3 Infrastructure
-*   **Database**: PostgreSQL (Metadata, Relational Graph).
-*   **Queue/Cache**: Redis (Upstash/Fly.io) for deduplication and task scheduling.
-*   **Deployment**:
-    *   **Cloud**: Fly.io (Backend), GitHub Pages (Frontend).
-    *   **CI/CD**: GitHub Actions for automated testing and deployment.
+*   **Local Research Stack (Optional)**:
+    *   **Database**: PostgreSQL (metadata, relational graph).
+    *   **Queue/Cache**: Redis (deduplication and task scheduling).
+*   **Zero-cost Publishing Baseline**:
+    *   **Frontend**: GitHub Pages (static site).
+    *   **Data**: build-time generated static JSON embedded into the frontend bundle.
+    *   **Automation**: GitHub Actions for scheduled data refresh and Pages deployment.
 
 ---
 
@@ -97,7 +99,6 @@ npm run dev
 
 ## 5. Deployment Status
 *   **Live Dashboard**: [https://computational-social-science.github.io/globe-media-pulse/](https://computational-social-science.github.io/globe-media-pulse/)
-*   **API Endpoint**: [https://globe-media-pulse.fly.dev](https://globe-media-pulse.fly.dev)
 
 ---
 

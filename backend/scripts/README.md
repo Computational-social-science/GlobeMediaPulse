@@ -1,16 +1,16 @@
 # Database Migrations
 
-Currently, Globe Media Pulse uses a **Schema-on-Read** or **Auto-Initialization** approach via `backend/storage.py`.
+Currently, Globe Media Pulse uses a lightweight **auto-initialization** approach, and also includes Alembic scaffolding for future versioned migrations.
 
 ## Current Workflow
-- The application automatically initializes necessary tables (`error_events`, etc.) in `storage.py` on startup if they do not exist.
-- No formal migration tool (like Alembic) is currently enforced, but may be added as the schema complexity grows.
+- The application can initialize required tables on startup if they do not exist.
+- Alembic is present under `backend/alembic/`, but migrations are not yet a strict requirement for every schema change.
 
 ## Manual Migrations
 If you need to manually alter the schema:
 1. Connect to the database:
    ```bash
-   fly pg connect -a globemediapulse-db-production
+   docker-compose exec db psql -U postgres -d globemediapulse
    ```
 2. Run SQL commands.
 

@@ -2,29 +2,26 @@
 
 ## Environment Modes
 
-### 1. Hybrid Mode (Recommended)
-**"Local Frontend, Cloud Backend"**
-- **Frontend**: Runs locally on your machine (`localhost:5173`).
-- **Backend**: Connects to the live Fly.io instance (`globe-media-pulse.fly.dev`).
-- **Data**: Real production data (Media Seeds, Articles).
-- **Usage**: Run `start_dev.bat` in the project root.
+### 1. Static Frontend Mode (Default)
+**"Zero-cost, long-term free publishing"**
+- **Frontend**: Runs locally (`localhost:5173`) or on GitHub Pages.
+- **Backend**: Disabled.
+- **Data**: Loaded from build-time generated static bundle (`frontend/src/lib/data.js`).
+- **Usage (Windows)**: Run `start_dev.bat` in the project root.
 
-### 2. Full Remote Mode
-**"Cloud Frontend, Cloud Backend"**
-- **Frontend**: Accessed via GitHub Pages (e.g., `https://computational-social-science.github.io/globe-media-pulse/`).
-- **Backend**: Runs on Fly.io.
-- **Usage**: Push changes to `main` branch. GitHub Actions will auto-deploy.
+### 2. Local Full-Stack Mode (Research)
+**"Local frontend + local backend + local data stores"**
+- **Usage**: `docker-compose up --build`
+- **Frontend API (optional)**:
+  - `VITE_API_URL=http://localhost:8002`
+  - `VITE_WS_URL=ws://localhost:8002`
 
-## Key Configurations
-- **Frontend Config**: `frontend/.env.local`
-  ```properties
-  VITE_API_URL=https://globe-media-pulse.fly.dev
-  VITE_WS_URL=wss://globe-media-pulse.fly.dev
-  ```
-- **Backend CORS**: `backend/main.py`
-  - Allowed Origins: `localhost:5173`, `localhost:3000`, GitHub Pages domain.
+## Guardrails (TRAE / Portability / Cost)
+- Do not hardcode remote endpoints; require explicit environment variables.
+- Use relative paths in code and docs to keep the workspace portable.
+- Default architecture must remain free-to-run with GitHub Pages + GitHub Actions.
 
 ## Workflow
 1. **Edit Code**: Modify Svelte components in `frontend/src`.
 2. **Preview**: Changes reflect immediately in the local browser.
-3. **Commit**: `git push` to trigger deployment.
+3. **Publish**: `git push` to trigger GitHub Pages deployment.

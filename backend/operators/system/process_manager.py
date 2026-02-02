@@ -5,6 +5,7 @@ import os
 import sys
 import threading
 import time
+from collections import deque
 from typing import Optional
 from backend.core.monitoring import thread_status
 
@@ -31,6 +32,11 @@ class ProcessManager:
         
         self.crawler_process: Optional[subprocess.Popen] = None
         self.crawler_start_time = 0
+        self._crawler_stdout_tail = deque(maxlen=200)
+        self._crawler_stderr_tail = deque(maxlen=200)
+        self._crawler_last_exit_code: Optional[int] = None
+        self._crawler_last_exit_at: Optional[float] = None
+        self._crawler_last_spawn_error: Optional[str] = None
         self._initialized = True
         logger.info("ProcessManager initialized.")
 
@@ -73,6 +79,7 @@ class ProcessManager:
                 errors='replace' # Handle encoding errors gracefully (e.g. non-utf8 system warnings)
             )
             self.crawler_start_time = time.time()
+            self._crawler_last_spawn_error = None
             thread_status.heartbeat('crawler')
             logger.info(f"Crawler started with PID: {self.crawler_process.pid}")
             
@@ -82,6 +89,7 @@ class ProcessManager:
             self._start_log_reader(self.crawler_process.stderr, logging.ERROR, "ScrapyErr")
             
         except Exception as e:
+            self._crawler_last_spawn_error = f"{type(e).__name__}: {e}"
             logger.error(f"Failed to start crawler: {e}")
 
     def _start_log_reader(self, pipe, level, logger_name_suffix):
@@ -92,6 +100,10 @@ class ProcessManager:
                     if line:
                         clean_line = line.strip()
                         if clean_line:
+                            if logger_name_suffix == "ScrapyErr":
+                                self._crawler_stderr_tail.append(clean_line)
+                            else:
+                                self._crawler_stdout_tail.append(clean_line)
                             # Log with a specific name so we know it's from the crawler
                             l = logging.getLogger(f"crawler.{logger_name_suffix}")
                             l.log(level, clean_line)
@@ -127,6 +139,30 @@ class ProcessManager:
             thread_status.heartbeat('crawler') # Update heartbeat if alive
             return True
         else:
+            self._crawler_last_exit_code = int(poll)
+            self._crawler_last_exit_at = time.time()
             return False
+
+    def get_crawler_diagnostics(self) -> dict:
+        proc = self.crawler_process
+        running = self.is_crawler_running()
+        pid = None
+        try:
+            pid = int(proc.pid) if proc else None
+        except Exception:
+            pid = None
+        uptime_s = None
+        if running and self.crawler_start_time:
+            uptime_s = max(0.0, time.time() - float(self.crawler_start_time))
+        return {
+            "running": running,
+            "pid": pid,
+            "uptime_s": uptime_s,
+            "last_exit_code": self._crawler_last_exit_code,
+            "last_exit_at": self._crawler_last_exit_at,
+            "last_spawn_error": self._crawler_last_spawn_error,
+            "stderr_tail": list(self._crawler_stderr_tail),
+            "stdout_tail": list(self._crawler_stdout_tail),
+        }
 
 process_manager = ProcessManager()

@@ -1,9 +1,10 @@
 import requests
 import time
 import sys
+import os
 
 BASE_URL = "http://localhost:8002/api"
-FRONTEND_URL = "http://localhost:5174"
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 def log(msg, status="INFO"):
     print(f"[{status}] {msg}")

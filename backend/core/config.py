@@ -1,4 +1,3 @@
-
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -35,6 +34,20 @@ class Settings(BaseSettings):
     
     # Media Cloud Integration
     MEDIA_CLOUD_API_KEY: str = os.getenv("MEDIA_CLOUD_API_KEY", "")
+
+    SEED_QUEUE_KEY: str = os.getenv("SEED_QUEUE_KEY", "universal_news:start_urls")
+    SEED_SOURCE_TIERS: str = os.getenv("SEED_SOURCE_TIERS", "Tier-0,Tier-1")
+    SEED_QUEUE_MIN: int = int(os.getenv("SEED_QUEUE_MIN", "50"))
+    SEED_QUEUE_TARGET: int = int(os.getenv("SEED_QUEUE_TARGET", "200"))
+    SEED_URL_SCHEME: str = os.getenv("SEED_URL_SCHEME", "https")
+
+    CANDIDATE_PROMOTION_THRESHOLD: int = int(os.getenv("CANDIDATE_PROMOTION_THRESHOLD", "5"))
+    CANDIDATE_CITATION_TIERS: str = os.getenv("CANDIDATE_CITATION_TIERS", "Tier-0,Tier-1")
+
+    SOT_ROLE: str = os.getenv("SOT_ROLE", "cache")
+    SOT_REMOTE_API_URL: str = os.getenv("SOT_REMOTE_API_URL", os.getenv("REMOTE_API_URL", ""))
+
+    SIMHASH_SIMILARITY_THRESHOLD: int = int(os.getenv("SIMHASH_SIMILARITY_THRESHOLD", "3"))
     
     model_config = SettingsConfigDict(case_sensitive=True)
 

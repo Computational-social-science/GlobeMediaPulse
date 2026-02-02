@@ -109,7 +109,7 @@ def seed_media_sources():
     4.  Inserts new records if missing.
     """
     url = settings.DATABASE_URL
-    # Patch for Fly.io/SQLAlchemy compatibility (postgres:// -> postgresql://)
+    # Compatibility patch for legacy postgres URL schemes (postgres:// -> postgresql://)
     if url and url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
         

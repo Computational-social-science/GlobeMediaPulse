@@ -5,7 +5,9 @@ import logging
 import redis
 import requests
 import subprocess
+import shutil
 import datetime
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from sqlalchemy import create_engine, text
 from backend.core.config import settings
@@ -34,12 +36,45 @@ def _redact_url(url: str) -> str:
     except Exception:
         return "<redacted>"
 
+def _jsonable(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            out[str(k)] = _jsonable(v)
+        return out
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(v) for v in value]
+    return str(value)
+
 def _run(cmd: list[str], cwd: str | None = None, env: dict[str, str] | None = None, check: bool = True, dry_run: bool = False) -> int:
     rendered = " ".join(cmd)
     click.echo(f"$ {rendered}")
     if dry_run:
         return 0
-    p = subprocess.run(cmd, cwd=cwd, env=env, check=False)
+    resolved_cmd = list(cmd)
+    if os.name == "nt" and resolved_cmd:
+        exe = resolved_cmd[0]
+        if not shutil.which(exe):
+            for ext in (".cmd", ".exe", ".bat"):
+                candidate = shutil.which(f"{exe}{ext}")
+                if candidate:
+                    resolved_cmd[0] = candidate
+                    break
+    try:
+        p = subprocess.run(resolved_cmd, cwd=cwd, env=env, check=False)
+    except FileNotFoundError:
+        if os.name != "nt":
+            raise
+        p = subprocess.run(subprocess.list2cmdline(resolved_cmd), cwd=cwd, env=env, shell=True, check=False)
     if check and p.returncode != 0:
         raise click.ClickException(f"Command failed ({p.returncode}): {rendered}")
     return int(p.returncode)
@@ -169,17 +204,199 @@ def crawl(spider_name):
     except Exception as e:
         click.echo(f"❌ Error running crawler: {e}")
 
+@cli.command(name="ensure-seed-queue")
+def ensure_seed_queue():
+    report = None
+    try:
+        from backend.operators.system.guardian import system_guardian
+
+        report = system_guardian.ensure_seed_queue()
+    except Exception as e:
+        click.echo(f"❌ Seed queue check failed: {e}")
+        sys.exit(1)
+    click.echo(f"Seed queue: {report}")
+
+@cli.command(name="drill-low-seed")
+@click.option("--queue-key", default="", show_default=False)
+@click.option("--min-len", default=10, show_default=True, type=int)
+@click.option("--target-len", default=50, show_default=True, type=int)
+@click.option("--tiers", default="", show_default=False)
+@click.option("--scheme", default="", show_default=False)
+@click.option("--trim/--no-trim", default=True, show_default=True)
+def drill_low_seed(queue_key: str, min_len: int, target_len: int, tiers: str, scheme: str, trim: bool):
+    try:
+        from backend.operators.system.guardian import system_guardian
+    except Exception as e:
+        click.echo(f"❌ Seed queue drill unavailable: {e}")
+        sys.exit(1)
+
+    queue_key = (queue_key or settings.SEED_QUEUE_KEY or "universal_news:start_urls").strip()
+    tiers_value = (tiers or settings.SEED_SOURCE_TIERS or "Tier-0,Tier-1").strip()
+    scheme_value = (scheme or settings.SEED_URL_SCHEME or "https").strip() or "https"
+
+    settings.SEED_QUEUE_KEY = queue_key
+    settings.SEED_SOURCE_TIERS = tiers_value
+    settings.SEED_QUEUE_MIN = int(min_len)
+    settings.SEED_QUEUE_TARGET = int(target_len)
+    settings.SEED_URL_SCHEME = scheme_value
+
+    redis_url = settings.REDIS_URL
+    r = redis.Redis.from_url(redis_url)
+    try:
+        before_len = int(r.llen(queue_key) or 0)
+    except Exception as e:
+        click.echo(f"❌ Redis unavailable: {e}")
+        sys.exit(1)
+
+    if trim:
+        keep = max(int(min_len) - 1, 0)
+        if keep == 0:
+            r.delete(queue_key)
+        else:
+            r.ltrim(queue_key, 0, keep - 1)
+
+    after_trim = int(r.llen(queue_key) or 0)
+    report = system_guardian.ensure_seed_queue()
+    final_len = int(r.llen(queue_key) or 0)
+    click.echo(f"Low-seed drill: before={before_len} after_trim={after_trim} after_fill={final_len} report={report}")
+
+@cli.command(name="drill-remote-disconnect")
+@click.option("--remote-api", default="http://127.0.0.1:9", show_default=True)
+@click.option("--queue-key", default="", show_default=False)
+@click.option("--min-len", default=10, show_default=True, type=int)
+@click.option("--target-len", default=50, show_default=True, type=int)
+@click.option("--tiers", default="", show_default=False)
+@click.option("--scheme", default="", show_default=False)
+@click.option("--trim/--no-trim", default=True, show_default=True)
+@click.option("--force-remote/--no-force-remote", default=True, show_default=True)
+@click.option("--timeout", default=2, show_default=True, type=int)
+def drill_remote_disconnect(
+    remote_api: str,
+    queue_key: str,
+    min_len: int,
+    target_len: int,
+    tiers: str,
+    scheme: str,
+    trim: bool,
+    force_remote: bool,
+    timeout: int,
+):
+    try:
+        from backend.operators.system.guardian import system_guardian
+    except Exception as e:
+        click.echo(f"❌ Remote disconnect drill unavailable: {e}")
+        sys.exit(1)
+
+    queue_key = (queue_key or settings.SEED_QUEUE_KEY or "universal_news:start_urls").strip()
+    tiers_value = (tiers or settings.SEED_SOURCE_TIERS or "Tier-0,Tier-1").strip()
+    scheme_value = (scheme or settings.SEED_URL_SCHEME or "https").strip() or "https"
+
+    original_remote = settings.SOT_REMOTE_API_URL
+    original_tiers = settings.SEED_SOURCE_TIERS
+
+    settings.SOT_REMOTE_API_URL = (remote_api or "").rstrip("/")
+    settings.SEED_QUEUE_KEY = queue_key
+    settings.SEED_QUEUE_MIN = int(min_len)
+    settings.SEED_QUEUE_TARGET = int(target_len)
+    settings.SEED_URL_SCHEME = scheme_value
+    settings.SEED_SOURCE_TIERS = "Tier-9" if force_remote else tiers_value
+
+    redis_url = settings.REDIS_URL
+    r = redis.Redis.from_url(redis_url)
+    try:
+        before_len = int(r.llen(queue_key) or 0)
+    except Exception as e:
+        settings.SOT_REMOTE_API_URL = original_remote
+        settings.SEED_SOURCE_TIERS = original_tiers
+        click.echo(f"❌ Redis unavailable: {e}")
+        sys.exit(1)
+
+    try:
+        requests.get(f"{settings.SOT_REMOTE_API_URL}/system/export/media-sources", timeout=timeout)
+    except Exception:
+        pass
+
+    if trim:
+        keep = max(int(min_len) - 1, 0)
+        if keep == 0:
+            r.delete(queue_key)
+        else:
+            r.ltrim(queue_key, 0, keep - 1)
+
+    after_trim = int(r.llen(queue_key) or 0)
+    report = None
+    final_len = after_trim
+    try:
+        report = system_guardian.ensure_seed_queue()
+        final_len = int(r.llen(queue_key) or 0)
+    finally:
+        settings.SOT_REMOTE_API_URL = original_remote
+        settings.SEED_SOURCE_TIERS = original_tiers
+
+    click.echo(
+        "Remote disconnect drill: "
+        f"remote={remote_api} before={before_len} after_trim={after_trim} after_fill={final_len} report={report}"
+    )
+
+@cli.command(name="net-growth")
+@click.option("--days", default=14, show_default=True, type=int)
+@click.option("--day", default="", show_default=False)
+def net_growth(days: int, day: str):
+    day_s = (day or "").strip() or None
+    recorded = storage_operator.record_daily_growth_metrics(day=day_s)
+    if recorded.get("status") != "ok":
+        click.echo(f"❌ Failed to record growth metrics: {recorded}")
+        sys.exit(1)
+
+    recent = storage_operator.get_recent_growth_metrics(days=int(days))
+    click.echo(f"Today: {recorded}")
+    if not recent:
+        return
+
+    last3 = recent[:3]
+    avg_media_net = sum(int(r.get("media_sources_net") or 0) for r in last3) / float(len(last3))
+    avg_cand_growth = sum(float(r.get("candidate_sources_growth_rate") or 0.0) for r in last3) / float(len(last3))
+    avg_art_net = sum(int(r.get("news_articles_net") or 0) for r in last3) / float(len(last3))
+
+    current_promo = int(os.getenv("CANDIDATE_PROMOTION_THRESHOLD", "5") or "5")
+    current_simhash = int(os.getenv("SIMHASH_SIMILARITY_THRESHOLD", "3") or "3")
+
+    plateau = avg_media_net <= 0.0
+    suggestions: dict[str, Any] = {
+        "plateau": plateau,
+        "avg_media_sources_net_3d": avg_media_net,
+        "avg_candidate_sources_growth_rate_3d": avg_cand_growth,
+        "avg_news_articles_net_3d": avg_art_net,
+        "recommend": {},
+    }
+
+    if plateau and avg_cand_growth >= 0.02:
+        suggestions["recommend"]["CANDIDATE_PROMOTION_THRESHOLD"] = max(2, current_promo - 1)
+
+    if plateau and avg_art_net <= 0.0:
+        suggestions["recommend"]["SIMHASH_SIMILARITY_THRESHOLD"] = max(1, current_simhash - 1)
+
+    click.echo(f"Suggested tuning: {suggestions}")
+
 @cli.command(name="sync-to-remote")
-@click.option("--remote-api", default=lambda: os.getenv("REMOTE_API_URL", "https://globe-media-pulse.fly.dev/api"), show_default=True)
+@click.option("--remote-api", default=lambda: os.getenv("REMOTE_API_URL", ""), show_default=False)
 @click.option("--token", default=lambda: os.getenv("SYNC_TOKEN", ""), show_default=False)
 @click.option("--include-candidates/--no-candidates", default=True, show_default=True)
 @click.option("--candidates-limit", default=5000, show_default=True, type=int)
+@click.option("--batch-size", default=2000, show_default=True, type=int)
 @click.option("--timeout", default=30, show_default=True, type=int)
-def sync_to_remote(remote_api: str, token: str, include_candidates: bool, candidates_limit: int, timeout: int):
+@click.option("--force", is_flag=True, default=False)
+def sync_to_remote(remote_api: str, token: str, include_candidates: bool, candidates_limit: int, batch_size: int, timeout: int, force: bool):
+    if (settings.SOT_ROLE or "").strip().lower() != "source" and not force:
+        click.echo("❌ Remote write blocked (remote is the SoT). Use --force to override.")
+        sys.exit(1)
     if not token or not token.strip():
         click.echo("❌ Missing SYNC_TOKEN (set env var or pass --token).")
         sys.exit(1)
     remote_api = (remote_api or "").rstrip("/")
+    if not remote_api:
+        click.echo("❌ Missing remote API base URL (set REMOTE_API_URL or pass --remote-api).")
+        sys.exit(1)
     headers = {"X-Sync-Token": token.strip()}
 
     click.echo(f"Exporting local media_sources...")
@@ -187,18 +404,30 @@ def sync_to_remote(remote_api: str, token: str, include_candidates: bool, candid
     click.echo(f"Local media_sources: {len(media_sources)}")
 
     click.echo("Pushing media_sources to remote...")
-    r = requests.post(
-        f"{remote_api}/system/sync/media-sources",
-        json=media_sources,
-        headers=headers,
-        timeout=timeout,
-    )
-    if r.status_code != 200:
-        click.echo(f"❌ Remote sync failed (media_sources): HTTP {r.status_code}")
-        click.echo(r.text)
-        sys.exit(1)
-    resp_media = r.json()
-    click.echo(f"✅ Remote media_sources sync: {resp_media.get('processed', 0)} processed")
+    total = len(media_sources)
+    size = int(batch_size) if isinstance(batch_size, int) and batch_size > 0 else 2000
+    processed_total = 0
+    for start in range(0, total, size):
+        batch = media_sources[start : start + size]
+        batch_payload = [_jsonable(item) for item in batch]
+        r = requests.post(
+            f"{remote_api}/system/sync/media-sources",
+            json=batch_payload,
+            headers=headers,
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            click.echo(f"❌ Remote sync failed (media_sources): HTTP {r.status_code}")
+            click.echo(r.text)
+            sys.exit(1)
+        resp_media = r.json()
+        err = resp_media.get("error")
+        if err:
+            click.echo(f"❌ Remote sync error (media_sources): {err}")
+            sys.exit(1)
+        processed_total += int(resp_media.get("processed", 0) or 0)
+        click.echo(f"  media_sources batch: {min(start + size, total)}/{total}")
+    click.echo(f"✅ Remote media_sources sync: {processed_total} processed")
 
     if include_candidates:
         click.echo("Exporting local candidate_sources...")
@@ -206,18 +435,29 @@ def sync_to_remote(remote_api: str, token: str, include_candidates: bool, candid
         click.echo(f"Local candidate_sources: {len(candidates)}")
 
         click.echo("Pushing candidate_sources to remote...")
-        r2 = requests.post(
-            f"{remote_api}/system/sync/candidate-sources",
-            json=candidates,
-            headers=headers,
-            timeout=timeout,
-        )
-        if r2.status_code != 200:
-            click.echo(f"❌ Remote sync failed (candidate_sources): HTTP {r2.status_code}")
-            click.echo(r2.text)
-            sys.exit(1)
-        resp_candidates = r2.json()
-        click.echo(f"✅ Remote candidate_sources sync: {resp_candidates.get('processed', 0)} processed")
+        total2 = len(candidates)
+        processed_total2 = 0
+        for start in range(0, total2, size):
+            batch = candidates[start : start + size]
+            batch_payload = [_jsonable(item) for item in batch]
+            r2 = requests.post(
+                f"{remote_api}/system/sync/candidate-sources",
+                json=batch_payload,
+                headers=headers,
+                timeout=timeout,
+            )
+            if r2.status_code != 200:
+                click.echo(f"❌ Remote sync failed (candidate_sources): HTTP {r2.status_code}")
+                click.echo(r2.text)
+                sys.exit(1)
+            resp_candidates = r2.json()
+            err2 = resp_candidates.get("error")
+            if err2:
+                click.echo(f"❌ Remote sync error (candidate_sources): {err2}")
+                sys.exit(1)
+            processed_total2 += int(resp_candidates.get("processed", 0) or 0)
+            click.echo(f"  candidate_sources batch: {min(start + size, total2)}/{total2}")
+        click.echo(f"✅ Remote candidate_sources sync: {processed_total2} processed")
 
     click.echo("Fetching remote counts...")
     r3 = requests.get(f"{remote_api}/system/sync/counts", headers=headers, timeout=timeout)
@@ -233,11 +473,72 @@ def sync_to_remote(remote_api: str, token: str, include_candidates: bool, candid
     else:
         click.echo(f"⚠️  Remote crawler status unavailable: HTTP {r4.status_code}")
 
+@cli.command(name="sync-from-remote")
+@click.option("--remote-api", default=lambda: os.getenv("REMOTE_API_URL", settings.SOT_REMOTE_API_URL), show_default=True)
+@click.option("--token", default=lambda: os.getenv("SYNC_TOKEN", ""), show_default=False)
+@click.option("--tiers", default="Tier-0,Tier-1", show_default=True)
+@click.option("--limit", default=0, show_default=True, type=int)
+@click.option("--include-candidates/--no-candidates", default=False, show_default=True)
+@click.option("--candidates-limit", default=5000, show_default=True, type=int)
+@click.option("--timeout", default=30, show_default=True, type=int)
+def sync_from_remote(
+    remote_api: str,
+    token: str,
+    tiers: str,
+    limit: int,
+    include_candidates: bool,
+    candidates_limit: int,
+    timeout: int,
+):
+    if not token or not token.strip():
+        click.echo("❌ Missing SYNC_TOKEN (set env var or pass --token).")
+        sys.exit(1)
+    remote_api = (remote_api or "").rstrip("/")
+    headers = {"X-Sync-Token": token.strip()}
+
+    r = requests.get(
+        f"{remote_api}/system/export/media-sources",
+        params={"tiers": tiers or "", "limit": int(limit)},
+        headers=headers,
+        timeout=timeout,
+    )
+    if r.status_code != 200:
+        click.echo(f"❌ Remote export failed (media_sources): HTTP {r.status_code}")
+        click.echo(r.text)
+        sys.exit(1)
+    media_sources = r.json()
+    if not isinstance(media_sources, list):
+        click.echo("❌ Remote export invalid (media_sources).")
+        sys.exit(1)
+    upserted = storage_operator.bulk_upsert_media_sources(media_sources)
+    click.echo(f"✅ Local media_sources updated: {upserted}")
+
+    if include_candidates:
+        r2 = requests.get(
+            f"{remote_api}/system/export/candidate-sources",
+            params={"limit": int(candidates_limit)},
+            headers=headers,
+            timeout=timeout,
+        )
+        if r2.status_code != 200:
+            click.echo(f"❌ Remote export failed (candidate_sources): HTTP {r2.status_code}")
+            click.echo(r2.text)
+            sys.exit(1)
+        candidates = r2.json()
+        if not isinstance(candidates, list):
+            click.echo("❌ Remote export invalid (candidate_sources).")
+            sys.exit(1)
+        upserted2 = storage_operator.bulk_upsert_candidate_sources(candidates)
+        click.echo(f"✅ Local candidate_sources updated: {upserted2}")
+
 @cli.command(name="remote-status")
-@click.option("--remote-api", default=lambda: os.getenv("REMOTE_API_URL", "https://globe-media-pulse.fly.dev/api"), show_default=True)
+@click.option("--remote-api", default=lambda: os.getenv("REMOTE_API_URL", ""), show_default=False)
 @click.option("--timeout", default=15, show_default=True, type=int)
 def remote_status(remote_api: str, timeout: int):
     remote_api = (remote_api or "").rstrip("/")
+    if not remote_api:
+        click.echo("❌ Missing remote API base URL (set REMOTE_API_URL or pass --remote-api).")
+        sys.exit(1)
     r = requests.get(f"{remote_api}/system/crawler/status", timeout=timeout)
     if r.status_code != 200:
         click.echo(f"❌ Remote status check failed: HTTP {r.status_code}")
@@ -246,16 +547,14 @@ def remote_status(remote_api: str, timeout: int):
     click.echo(f"Remote crawler status: {r.json()}")
 
 @cli.command(name="sync-all")
-@click.option("--remote-api", default=lambda: os.getenv("REMOTE_API_URL", "https://globe-media-pulse.fly.dev/api"), show_default=True)
+@click.option("--remote-api", default=lambda: os.getenv("REMOTE_API_URL", ""), show_default=False)
 @click.option("--sync-token", default=lambda: os.getenv("SYNC_TOKEN", ""), show_default=False)
 @click.option("--run-tests/--no-tests", default=True, show_default=True)
 @click.option("--docker/--no-docker", "do_docker", default=True, show_default=True)
 @click.option("--github/--no-github", "do_github", default=True, show_default=True)
 @click.option("--git-commit/--no-git-commit", default=False, show_default=True)
 @click.option("--git-push/--no-git-push", default=False, show_default=True)
-@click.option("--fly/--no-fly", "do_fly", default=True, show_default=True)
-@click.option("--fly-deploy/--no-fly-deploy", default=True, show_default=True)
-@click.option("--sync-data/--no-sync-data", default=True, show_default=True)
+@click.option("--sync-data/--no-sync-data", default=False, show_default=True)
 @click.option("--branch", default="", show_default=False)
 @click.option("--message", default="", show_default=False)
 @click.option("--dry-run", is_flag=True, default=False)
@@ -267,8 +566,6 @@ def sync_all(
     do_github: bool,
     git_commit: bool,
     git_push: bool,
-    do_fly: bool,
-    fly_deploy: bool,
     sync_data: bool,
     branch: str,
     message: str,
@@ -302,18 +599,6 @@ def sync_all(
                 _run(["git", "push", "-u", "origin", branch], cwd=repo_root, dry_run=dry_run)
             else:
                 _run(["git", "push"], cwd=repo_root, dry_run=dry_run)
-
-    if do_fly:
-        if sync_data:
-            if not sync_token or not sync_token.strip():
-                click.echo("⚠️  SYNC_TOKEN missing; skipping data sync to Fly.")
-            else:
-                env = os.environ.copy()
-                env["SYNC_TOKEN"] = sync_token.strip()
-                _run([sys.executable, "manage.py", "sync-to-remote", "--remote-api", remote_api], cwd=repo_root, env=env, dry_run=dry_run)
-        if fly_deploy:
-            _run(["fly", "deploy"], cwd=repo_root, dry_run=dry_run)
-        _run([sys.executable, "manage.py", "remote-status", "--remote-api", remote_api], cwd=repo_root, dry_run=dry_run)
 
 if __name__ == "__main__":
     cli()

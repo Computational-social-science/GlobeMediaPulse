@@ -23,6 +23,10 @@ export const mapState = writable({
     center: [20, 0] // Current map center coordinates [lng, lat]
 });
 
+export const mapIdleTimeout = writable(0);
+export const mapCommand = writable({ nonce: 0, type: null });
+export const mediaProfileStats = writable({ total: 0, hit: 0, rate: 0 });
+
 // Simulation Time Control
 export const isConnected = writable(false); // WebSocket connection status indicator
 export const systemStatus = writable('OFFLINE'); // Global System Status (ONLINE, OFFLINE, DEGRADED)

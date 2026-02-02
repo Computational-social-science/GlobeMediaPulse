@@ -10,6 +10,11 @@ from backend.core.config import settings
 from backend.utils.circuit_breaker import postgres_breaker, redis_breaker
 import redis
 
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
+
 # Configure Logger
 logger = logging.getLogger(__name__)
 
@@ -51,6 +56,8 @@ class SystemGuardianOperator:
         self.last_postgres_error: Optional[str] = None
         self.last_redis_error: Optional[str] = None
         self._last_crawler_restart_at: float = 0.0
+        self._crawler_restart_backoff_s: float = 60.0
+        self._crawler_restart_failures: int = 0
 
         self._initialized = True
         logger.info("SystemGuardianOperator initialized.")
@@ -104,18 +111,32 @@ class SystemGuardianOperator:
         crawler_running = process_manager.is_crawler_running()
         if crawler_running:
             thread_status.heartbeat('crawler')
+            if self._crawler_restart_failures:
+                self._crawler_restart_failures = 0
+                self._crawler_restart_backoff_s = 60.0
         else:
             services["crawler"] = "error"
             if autoheal:
                 now = time.time()
-                if now - self._last_crawler_restart_at >= 60.0:
+                if now - self._last_crawler_restart_at >= float(self._crawler_restart_backoff_s):
                     try:
-                        process_manager.restart_crawler()
+                        await asyncio.to_thread(process_manager.restart_crawler)
                         self._last_crawler_restart_at = now
+                        self._crawler_restart_failures = 0
+                        self._crawler_restart_backoff_s = 60.0
                         services["crawler"] = "restarting"
                     except Exception as e:
+                        self._last_crawler_restart_at = now
+                        self._crawler_restart_failures += 1
+                        self._crawler_restart_backoff_s = min(
+                            900.0,
+                            max(60.0, 30.0 * (2.0 ** min(float(self._crawler_restart_failures), 5.0))),
+                        )
                         services["crawler"] = "error"
                         services["crawler_error"] = str(e)
+                        services["crawler_diag"] = process_manager.get_crawler_diagnostics()
+                else:
+                    services["crawler_diag"] = process_manager.get_crawler_diagnostics()
             
         thread_stats = thread_status.get_status()
         
@@ -231,6 +252,9 @@ class SystemGuardianOperator:
                     timeout=TIMEOUT
                 )
                 return "ok" if ok else "error"
+            except asyncio.TimeoutError:
+                self.last_postgres_error = "timeout"
+                return "error"
             except Exception:
                 return "error"
 
@@ -243,6 +267,9 @@ class SystemGuardianOperator:
                     timeout=TIMEOUT
                 )
                 return "ok" if ok else "error"
+            except asyncio.TimeoutError:
+                self.last_redis_error = "timeout"
+                return "error"
             except Exception:
                 return "error"
 
@@ -256,12 +283,34 @@ class SystemGuardianOperator:
         }
 
     def _check_postgres_sync(self) -> bool:
+        if not psycopg2:
+            self.last_postgres_error = "psycopg2_not_installed"
+            return False
+
+        db_url = settings.DATABASE_URL
+        if not db_url:
+            self.last_postgres_error = "missing_database_url"
+            return False
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+        connect_timeout_s = int(os.getenv("PG_HEALTH_CONNECT_TIMEOUT_S", "2") or "2")
+        stmt_timeout_ms = int(os.getenv("PG_HEALTH_STATEMENT_TIMEOUT_MS", "2000") or "2000")
+        lock_timeout_ms = int(os.getenv("PG_HEALTH_LOCK_TIMEOUT_MS", "1000") or "1000")
+        options = f"-c statement_timeout={stmt_timeout_ms} -c lock_timeout={lock_timeout_ms}"
+
         try:
-            with db_manager.get_connection() as conn:
-                if conn is None: return False
+            conn = psycopg2.connect(db_url, connect_timeout=connect_timeout_s, options=options)
+            try:
+                conn.autocommit = True
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
                 return True
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"Postgres Check Error: {e}")
             self.last_postgres_error = str(e)

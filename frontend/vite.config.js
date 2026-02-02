@@ -6,6 +6,11 @@ import path from 'path'
 export default defineConfig({
   plugins: [svelte()],
   base: './', // Use relative paths for GitHub Pages
+  server: {
+    host: true,
+    port: 5173,
+    strictPort: true
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

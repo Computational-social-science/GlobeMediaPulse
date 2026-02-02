@@ -1,5 +1,5 @@
 // This file is generated at build time. DO NOT EDIT MANUALLY.
-// Source: data/countries_data.json, backend/data/constants.json
+// Source: data/countries_data.json, backend/data/constants.json, backend/resources/media_seeds.json
 
 export const DATA = {
     "COUNTRIES": [
@@ -2130,5 +2130,172 @@ export const DATA = {
             "Under Pressure",
             "Following Leaks"
         ]
-    }
+    },
+    "MEDIA_SOURCES": [
+        {
+            "domain": "reuters.com",
+            "name": "Reuters",
+            "tier": "Tier-0",
+            "country_code": "GBR",
+            "language": "en",
+            "tags": [
+                "agency"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "apnews.com",
+            "name": "Associated Press",
+            "tier": "Tier-0",
+            "country_code": "USA",
+            "language": "en",
+            "tags": [
+                "agency"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "afp.com",
+            "name": "Agence France-Presse",
+            "tier": "Tier-0",
+            "country_code": "FRA",
+            "language": "fr",
+            "tags": [
+                "agency"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "bbc.com",
+            "name": "BBC News",
+            "tier": "Tier-1",
+            "country_code": "GBR",
+            "language": "en",
+            "tags": [
+                "broadcaster"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "cnn.com",
+            "name": "CNN",
+            "tier": "Tier-1",
+            "country_code": "USA",
+            "language": "en",
+            "tags": [
+                "broadcaster"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "nytimes.com",
+            "name": "The New York Times",
+            "tier": "Tier-1",
+            "country_code": "USA",
+            "language": "en",
+            "tags": [
+                "newspaper"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "washingtonpost.com",
+            "name": "The Washington Post",
+            "tier": "Tier-1",
+            "country_code": "USA",
+            "language": "en",
+            "tags": [
+                "newspaper"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "theguardian.com",
+            "name": "The Guardian",
+            "tier": "Tier-1",
+            "country_code": "GBR",
+            "language": "en",
+            "tags": [
+                "newspaper"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "aljazeera.com",
+            "name": "Al Jazeera",
+            "tier": "Tier-1",
+            "country_code": "QAT",
+            "language": "en",
+            "tags": [
+                "broadcaster"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "lemonde.fr",
+            "name": "Le Monde",
+            "tier": "Tier-1",
+            "country_code": "FRA",
+            "language": "fr",
+            "tags": [
+                "newspaper"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "spiegel.de",
+            "name": "Der Spiegel",
+            "tier": "Tier-1",
+            "country_code": "DEU",
+            "language": "de",
+            "tags": [
+                "magazine"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "elpais.com",
+            "name": "El Pa\u00eds",
+            "tier": "Tier-1",
+            "country_code": "ESP",
+            "language": "es",
+            "tags": [
+                "newspaper"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "folha.uol.com.br",
+            "name": "Folha de S.Paulo",
+            "tier": "Tier-1",
+            "country_code": "BRA",
+            "language": "pt",
+            "tags": [
+                "newspaper"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "timesofindia.indiatimes.com",
+            "name": "The Times of India",
+            "tier": "Tier-1",
+            "country_code": "IND",
+            "language": "en",
+            "tags": [
+                "newspaper"
+            ],
+            "logo_url": null
+        },
+        {
+            "domain": "nhk.or.jp",
+            "name": "NHK",
+            "tier": "Tier-1",
+            "country_code": "JPN",
+            "language": "ja",
+            "tags": [
+                "broadcaster"
+            ],
+            "logo_url": null
+        }
+    ]
 };

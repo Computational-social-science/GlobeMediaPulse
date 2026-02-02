@@ -1,5 +1,6 @@
 
 import time
+import os
 from typing import Dict
 from threading import Lock
 
@@ -31,6 +32,8 @@ class ThreadStatusManager:
         """
         now = time.time()
         status = {}
+        seed_sync_interval_min = int(os.getenv("SEED_SYNC_INTERVAL_MIN", "15") or "15")
+        gde_record_interval_min = int(os.getenv("GDE_RECORD_INTERVAL_MIN", "60") or "60")
         with self._lock:
             for service, last_beat in self.heartbeats.items():
                 # Thresholds for different services could be configurable
@@ -40,8 +43,14 @@ class ThreadStatusManager:
                 threshold = 60 # Default 1 min
                 if service == 'cleanup':
                     threshold = 7300 # 2h + buffer
-                elif service == 'monitor':
+                elif service in ('monitor', 'guardian'):
                     threshold = 120 # 4x interval
+                elif service == 'seed_sync':
+                    threshold = max(120, seed_sync_interval_min * 60 * 4)
+                elif service == 'gde_metrics':
+                    threshold = max(120, gde_record_interval_min * 60 * 4)
+                elif service == 'metrics':
+                    threshold = 60 * 60 * 2
                 
                 if now - last_beat < threshold:
                     status[service] = 'running'

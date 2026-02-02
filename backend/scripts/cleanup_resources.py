@@ -2,14 +2,14 @@ import os
 import shutil
 import logging
 import glob
-import time
+import tempfile
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def cleanup_temp_resources():
     """
-    Cleans up temporary files to free up space on Fly.io ephemeral VMs.
+    Cleans up temporary files to free up space on ephemeral runtimes.
     Target:
         - Scrapy/Playwright temporary directories.
         - Old log files.
@@ -19,11 +19,12 @@ def cleanup_temp_resources():
     
     # Define targets
     # Temp directories often used by libraries
+    tmp_dir = tempfile.gettempdir()
     temp_patterns = [
-        "/tmp/playwright*",
-        "/tmp/scrapy*",
-        "/tmp/pymp-*", # Multiprocessing
-        "/tmp/.X*-lock",
+        os.path.join(tmp_dir, "playwright*"),
+        os.path.join(tmp_dir, "scrapy*"),
+        os.path.join(tmp_dir, "pymp-*"), # Multiprocessing
+        os.path.join(tmp_dir, ".X*-lock"),
         "./.scrapy/httpcache" # If enabled
     ]
     

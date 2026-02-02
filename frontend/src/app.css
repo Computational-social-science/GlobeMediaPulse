@@ -5,6 +5,22 @@
 :root {
   --font-body: 'Rajdhani', sans-serif;
   --font-mono: 'Share Tech Mono', monospace;
+  --sidebar-bg: rgba(192, 192, 192, 0.96);
+  --sidebar-surface: rgba(224, 224, 224, 0.96);
+  --sidebar-panel: rgba(236, 236, 236, 0.98);
+  --sidebar-panel-sub: rgba(248, 248, 248, 0.98);
+  --sidebar-border: rgba(0, 0, 0, 0.35);
+  --sidebar-border-soft: rgba(0, 0, 0, 0.2);
+  --sidebar-text: #0b0b0b;
+  --sidebar-text-muted: #1f1f1f;
+  --sidebar-text-dim: #404040;
+  --sidebar-text-quiet: #606060;
+  --sidebar-indicator: rgba(0, 0, 128, 0.85);
+  --sidebar-hover: rgba(0, 0, 128, 0.08);
+  --status-ok: #008000;
+  --status-warn: #b8860b;
+  --status-error: #b00020;
+  --status-neutral: #606060;
 }
 
 body {
@@ -60,9 +76,82 @@ body {
 .neon-text-blue {
   text-shadow: 0 0 5px #00f3ff, 0 0 10px #00f3ff;
 }
-
 .neon-text-pink {
   text-shadow: 0 0 5px #ff00ff, 0 0 10px #ff00ff;
+.sidebar-top {
+  background-color: var(--sidebar-surface);
+  border-bottom: 1px solid var(--sidebar-border);
+}
+.sidebar-panel {
+  background-color: var(--sidebar-surface);
+}
+.sidebar-panel-soft {
+  background-color: var(--sidebar-panel);
+}
+.sidebar-panel-sub {
+  background-color: var(--sidebar-panel-sub);
+}
+.sidebar-divider {
+  background-color: var(--sidebar-border);
+}
+.sidebar-border {
+  border-color: var(--sidebar-border);
+}
+.sidebar-border-soft {
+  border-color: var(--sidebar-border-soft);
+}
+.sidebar-text {
+  color: var(--sidebar-text);
+}
+.sidebar-text-muted {
+  color: var(--sidebar-text-muted);
+}
+.sidebar-text-dim {
+  color: var(--sidebar-text-dim);
+}
+.sidebar-text-quiet {
+  color: var(--sidebar-text-quiet);
+}
+.sidebar-icon-muted {
+  color: var(--sidebar-text-muted);
+}
+.sidebar-icon-dim {
+  color: var(--sidebar-text-quiet);
+}
+.sidebar-hoverable:hover {
+  background-color: var(--sidebar-hover);
+}
+.sidebar-active {
+  background-color: var(--sidebar-hover);
+  box-shadow: inset 0 0 0 1px var(--sidebar-border);
+}
+.sidebar-indicator {
+  background-color: var(--sidebar-indicator);
+}
+
+.status-text-ok {
+  color: var(--status-ok);
+}
+.status-text-warn {
+  color: var(--status-warn);
+}
+.status-text-error {
+  color: var(--status-error);
+}
+.status-text-neutral {
+  color: var(--status-neutral);
+}
+.status-dot-ok {
+  background-color: var(--status-ok);
+}
+.status-dot-warn {
+  background-color: var(--status-warn);
+}
+.status-dot-error {
+  background-color: var(--status-error);
+}
+.status-dot-neutral {
+  background-color: var(--status-neutral);
 }
 
 .gmp-flag {

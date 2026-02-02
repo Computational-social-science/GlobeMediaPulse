@@ -1,8 +1,7 @@
 <script lang="ts">
-    import { onMount, onDestroy, afterUpdate, setContext } from 'svelte';
+    import { onMount, onDestroy, setContext } from 'svelte';
     import { get } from 'svelte/store';
     import {
-        windowState,
         serviceStatus,
         systemStatus,
         backendThreadStatus,
@@ -11,9 +10,12 @@
         newsEvents,
         soundEnabled,
         audioEnabled,
-        audioVolume
+        audioVolume,
+        mapCommand,
+        mediaProfileStats,
     } from './lib/stores.js';
     import MapContainer from './lib/components/MapContainer.svelte';
+    import { DATA } from './lib/data.js';
 
     class SoundManager {
         ctx: AudioContext | null = null;
@@ -171,18 +173,20 @@
         url: string;
 
         constructor() {
-            // @ts-expect-error vite env typing
-            const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8002';
-            // @ts-expect-error vite env typing
-            const wsBase = import.meta.env.VITE_WS_URL || apiBase.replace(/^http/, 'ws');
-            this.url = wsBase.endsWith('/ws') ? wsBase : `${wsBase}/ws`;
-            console.log(`[WebSocket] Initialized with URL: ${this.url}`);
+            this.url = '';
         }
 
         /**
          * Connect and stream updates with deterministic retry delay $\Delta t=5000$ ms.
          */
         connect() {
+            if (isStaticMode()) return;
+            if (!this.url) {
+                const apiBase = resolveApiBase();
+                const wsBase = resolveWsBase(apiBase);
+                this.url = wsBase ? (wsBase.endsWith('/ws') ? wsBase : `${wsBase}/ws`) : '';
+            }
+            if (!this.url) return;
             if (this.ws) return;
 
             console.log(`Connecting to WebSocket: ${this.url}`);
@@ -230,6 +234,7 @@
                 setOfflineTelemetry();
                 systemStatus.set('OFFLINE');
                 this.ws = null;
+                if (isStaticMode()) return;
                 setTimeout(() => this.connect(), this.reconnectInterval);
             };
 
@@ -243,55 +248,206 @@
     const webSocketService = new WebSocketService();
     setContext('soundManager', soundManager);
 
+    function getViteEnv(): { VITE_API_URL?: string; VITE_API_BASE_URL?: string; VITE_WS_URL?: string; VITE_STATIC_MODE?: string } {
+        return (
+            (import.meta as {
+                env?: { VITE_API_URL?: string; VITE_API_BASE_URL?: string; VITE_WS_URL?: string; VITE_STATIC_MODE?: string };
+            }).env || {}
+        );
+    }
+
+    function isStaticMode(): boolean {
+        const env = getViteEnv();
+        const forced = String(env.VITE_STATIC_MODE || '').trim().toLowerCase();
+        if (forced === '1' || forced === 'true' || forced === 'yes') return true;
+        return window.location.hostname !== 'localhost' && !env.VITE_API_URL && !env.VITE_API_BASE_URL;
+    }
+
+    function resolveApiBase(): string {
+        if (isStaticMode()) return '';
+        const env = getViteEnv();
+        return (
+            env.VITE_API_URL ||
+            env.VITE_API_BASE_URL ||
+            (window.location.hostname === 'localhost' ? 'http://localhost:8002' : '')
+        );
+    }
+
+    function resolveWsBase(apiBase: string): string {
+        const env = getViteEnv();
+        return env.VITE_WS_URL || apiBase.replace(/^http/, 'ws');
+    }
+
     let totalSources = 0;
     let healthCheckTimer: ReturnType<typeof setTimeout>;
     let retryCount = 0;
     let isLoading = true;
+    let apiOk = false;
+    let apiLatencyMs: number | null = null;
+    let healthUpdatedAt = 0;
+    let uiNow = Date.now();
+    let gdeMetrics: {
+        gde: number;
+        shannon_entropy: number;
+        normalized_shannon: number;
+        geographic_dispersion_km: number;
+        normalized_dispersion: number;
+        country_count: number;
+        total_visits: number;
+        window_hours: number;
+        gini_coefficient: number;
+        alpha: number;
+    } | null = null;
+    const gdeWindowOptions = [6, 12, 24, 72];
+    const gdeAlphaOptions = [0.4, 0.6, 0.8];
+    let gdeWindowHours = 24;
+    let gdeAlpha = 0.6;
+    let growthMetrics: Array<{
+        day: string;
+        media_sources_net: number;
+        candidate_sources_growth_rate: number;
+        news_articles_net: number;
+        media_sources_count: number;
+        candidate_sources_count: number;
+        news_articles_count: number;
+    }> = [];
 
-    let activeTab = 'health';
-    let showFlagDiagnostics = false;
-    const flagDiagnosticAlpha2 = ['US', 'CN', 'GB', 'FR', 'DE', 'JP', 'IN', 'BR', 'RU', 'ZA'];
-
-    let logContainer: HTMLElement | null = null;
-
-    let isDragging = false;
-    let draggingId: string | null = null;
-    let dragOffset = { x: 0, y: 0 };
-
-    let mouseX = 0;
-    let mouseY = 0;
-    let hudX = 0;
-    let hudY = 0;
-    let frameX = 0;
-    let frameY = 0;
-
-    let brainStats = {
-        top_entities: [],
-        narrative_divergence: {
-            tier_0_sentiment: 0,
-            tier_2_sentiment: 0,
-            divergence: 0,
-            alert: false
-        }
-    };
-    let brainLoading = true;
-
-    const windows: Array<{ id: string; title: string; icon: string; width: string; height: string }> = [
-        { id: 'systemMonitor', title: 'SYSTEM MONITOR', icon: '📡', width: '560px', height: '640px' },
-        { id: 'brain', title: 'BRAIN', icon: '🧠', width: '420px', height: '360px' }
-    ];
+    let activeView: 'health' | 'autoheal' | 'gde' = 'gde';
+    let expandedPanel: 'health' | 'autoheal' | 'gde' | null = 'gde';
+    let sidebarCollapsed = true;
+    let lastExpandedPanel: 'health' | 'autoheal' | 'gde' | null = 'gde';
+    let toolsExpanded = false;
+    let healthDetailExpanded = false;
+    let autohealDetailExpanded = false;
+    let safetyArmed = false;
+    let safetyAutoDisarmTimer: ReturnType<typeof setTimeout> | null = null;
+    let statusPanelExpanded = true;
+    const SIDEBAR_IDLE_MS = 12000;
+    let sidebarIdleTimer: ReturnType<typeof setTimeout> | null = null;
+    let sidebarScrollTimer: ReturnType<typeof setTimeout> | null = null;
+    let isSidebarHovered = false;
+    let isSidebarScrolling = false;
 
     $: isOffline = $systemStatus === 'OFFLINE';
+    $: isDegraded = $systemStatus === 'DEGRADED';
+    $: isSystemCritical = $systemStatus === 'OFFLINE' || $systemStatus === 'DEGRADED';
     $: disabledClass = isOffline ? 'opacity-50 pointer-events-none grayscale' : '';
-    let isExpanded = true;
+    $: if (isOffline) safetyArmed = false;
+    $: if (expandedPanel !== 'autoheal') safetyArmed = false;
+    $: if (!safetyArmed && safetyAutoDisarmTimer) {
+        clearTimeout(safetyAutoDisarmTimer);
+        safetyAutoDisarmTimer = null;
+    }
 
-    $: divergenceColor = brainStats?.narrative_divergence?.alert ? 'text-red-500' : 'text-green-500';
+    $: statusSummary =
+        `${$systemStatus} | ${formatBigNumber(totalSources)} SRC | WS ${$isConnected ? '✓' : '×'} | API ${apiOk ? '✓' : '×'}${
+            apiOk && apiLatencyMs != null ? ` ${apiLatencyMs}ms` : ''
+        } | HEALTH ${formatAgeSeconds(healthUpdatedAt, uiNow)}`;
+    $: growthLatest = growthMetrics.length ? growthMetrics[0] : null;
 
-    afterUpdate(() => {
-        if (logContainer) {
-            logContainer.scrollTop = logContainer.scrollHeight;
+    function scheduleSidebarAutoCollapse() {
+        if (sidebarIdleTimer) clearTimeout(sidebarIdleTimer);
+        sidebarIdleTimer = setTimeout(() => {
+            if (isSidebarHovered || isSidebarScrolling) {
+                scheduleSidebarAutoCollapse();
+                return;
+            }
+            if (!sidebarCollapsed) collapseSidebar(true);
+        }, SIDEBAR_IDLE_MS);
+    }
+
+    function registerSidebarActivity() {
+        scheduleSidebarAutoCollapse();
+    }
+
+    function setSidebarHovering(nextValue: boolean) {
+        isSidebarHovered = nextValue;
+        if (nextValue) {
+            if (sidebarIdleTimer) clearTimeout(sidebarIdleTimer);
+            return;
         }
-    });
+        registerSidebarActivity();
+    }
+
+    function handleSidebarScroll() {
+        isSidebarScrolling = true;
+        if (sidebarIdleTimer) clearTimeout(sidebarIdleTimer);
+        if (sidebarScrollTimer) clearTimeout(sidebarScrollTimer);
+        sidebarScrollTimer = setTimeout(() => {
+            isSidebarScrolling = false;
+            registerSidebarActivity();
+        }, 800);
+    }
+
+    function expandSidebar() {
+        sidebarCollapsed = false;
+        if (expandedPanel == null) expandedPanel = lastExpandedPanel || 'gde';
+        registerSidebarActivity();
+    }
+
+    function collapseSidebar(isAuto = false) {
+        if (!sidebarCollapsed) lastExpandedPanel = expandedPanel;
+        sidebarCollapsed = true;
+        expandedPanel = null;
+        if (!isAuto) registerSidebarActivity();
+    }
+
+    function togglePanel(view: 'health' | 'autoheal' | 'gde') {
+        if (sidebarCollapsed) {
+            expandSidebar();
+            activeView = view;
+            expandedPanel = view;
+            return;
+        }
+        activeView = view;
+        expandedPanel = expandedPanel === view ? null : view;
+        registerSidebarActivity();
+    }
+
+    function emitMapCommand(type: string) {
+        mapCommand.update((current: { nonce?: number; type?: string | null }) => ({
+            nonce: (Number(current?.nonce) || 0) + 1,
+            type,
+        }));
+    }
+
+    function emitMapCommandWithActivity(type: string) {
+        emitMapCommand(type);
+        registerSidebarActivity();
+    }
+
+    function toggleSoundWithActivity() {
+        toggleSound();
+        registerSidebarActivity();
+    }
+
+    function toggleStatusPanel() {
+        statusPanelExpanded = !statusPanelExpanded;
+        registerSidebarActivity();
+    }
+
+    function openDiagnosticPanel() {
+        expandSidebar();
+        activeView = isOffline ? 'health' : isDegraded ? 'autoheal' : 'health';
+        expandedPanel = activeView;
+        registerSidebarActivity();
+    }
+
+    function getSystemSlotClass() {
+        if ($systemStatus === 'OFFLINE') return 'border-red-400/70 text-red-200';
+        if ($systemStatus === 'DEGRADED') return 'border-yellow-400/70 text-yellow-200';
+        return 'sidebar-border sidebar-text';
+    }
+
+    function getSecondarySlotClass() {
+        return isSystemCritical ? 'sidebar-border-soft sidebar-text-quiet' : 'sidebar-border sidebar-text';
+    }
+
+    function getSystemTitleClass() {
+        if ($systemStatus === 'OFFLINE') return 'text-red-200';
+        if ($systemStatus === 'DEGRADED') return 'text-yellow-200';
+        return 'sidebar-text-muted';
+    }
 
     /**
      * Health check with exponential backoff $\Delta t_n=\min(\Delta t_0 2^{n-1}, \Delta t_{max})$.
@@ -303,12 +459,21 @@
     }
 
     async function checkSystemHealth() {
+        if (isStaticMode()) {
+            apiOk = false;
+            apiLatencyMs = null;
+            healthUpdatedAt = Date.now();
+            systemStatus.set('STATIC');
+            return;
+        }
+        const startedAt = Date.now();
         const controller = new AbortController();
         const abortTimer = setTimeout(() => controller.abort(), 4000);
         try {
-            // @ts-expect-error vite env typing
-            const apiBase = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
+            const apiBase = resolveApiBase();
             const response = await fetch(`${apiBase}/health/full`, { signal: controller.signal });
+            apiOk = response.ok;
+            apiLatencyMs = Math.max(0, Date.now() - startedAt);
             if (response.ok) {
                 const data = await response.json();
                 if (data.services) serviceStatus.set(data.services);
@@ -331,11 +496,14 @@
             }
         } catch (error) {
             console.warn('Health check failed:', error);
+            apiOk = false;
+            apiLatencyMs = null;
             setOfflineTelemetry();
             systemStatus.set('OFFLINE');
             retryCount++;
         } finally {
             clearTimeout(abortTimer);
+            healthUpdatedAt = Date.now();
             setTimeout(() => {
                 isLoading = false;
             }, 500);
@@ -352,109 +520,150 @@
         healthCheckTimer = setTimeout(checkSystemHealth, nextDelay);
     }
 
-    function handleMouseMove(e: MouseEvent) {
-        soundManager.init();
-        const { clientX, clientY } = e;
-        const { innerWidth, innerHeight } = window;
-        mouseX = (clientX / innerWidth) * 2 - 1;
-        mouseY = (clientY / innerHeight) * 2 - 1;
-    }
-
-    function toggleWindow(id: string) {
-        windowState.update(s => {
-            const win = s[id];
-            if (win && win.visible) {
-                win.visible = false;
-            } else if (win) {
-                win.visible = true;
-                win.minimized = false;
-            }
-            return { ...s, [id]: win };
-        });
-    }
-
-    function startDrag(id: string, e: MouseEvent) {
-        if ($windowState[id]?.maximized) return;
-        soundManager.playClick();
-        isDragging = true;
-        draggingId = id;
-        dragOffset.x = e.clientX - $windowState[id].position.x;
-        dragOffset.y = e.clientY - $windowState[id].position.y;
-        window.addEventListener('mousemove', handleDrag);
-        window.addEventListener('mouseup', stopDrag);
-    }
-
-    function handleDrag(e: MouseEvent) {
-        const activeId = draggingId;
-        if (!isDragging || !activeId) return;
-        const newX = e.clientX - dragOffset.x;
-        const newY = e.clientY - dragOffset.y;
-        windowState.update(s => ({
-            ...s,
-            [activeId]: { ...s[activeId], position: { x: newX, y: newY } }
-        }));
-    }
-
-    function stopDrag() {
-        isDragging = false;
-        draggingId = null;
-        window.removeEventListener('mousemove', handleDrag);
-        window.removeEventListener('mouseup', stopDrag);
-    }
-
-    function toggleMinimize(id: string) {
-        soundManager.playHover();
-        windowState.update(s => ({
-            ...s,
-            [id]: { ...s[id], minimized: !s[id].minimized }
-        }));
-    }
-
-    function closeWindow(id: string) {
-        windowState.update(s => ({
-            ...s,
-            [id]: { ...s[id], visible: false }
-        }));
-    }
-
-    function bringToFront(id: string) {
-        windowState.update(s => {
-            let maxZ = 10;
-            Object.values(s).forEach(w => {
-                if (w.zIndex && w.zIndex > maxZ) maxZ = w.zIndex;
-            });
-            return {
-                ...s,
-                [id]: { ...s[id], zIndex: maxZ + 1 }
-            };
-        });
-    }
-
     function toggleSound() {
         $soundEnabled = !$soundEnabled;
     }
 
     async function fetchHeaderStats() {
+        if (isStaticMode()) return;
         try {
-            // @ts-expect-error vite env typing
-            const apiBase = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
-            const res = await fetch(`${apiBase}/api/map-data`);
+            const apiBase = resolveApiBase();
+            const res = await fetch(`${apiBase}/api/map-data`, { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
-                if (data.total_sources) {
-                    totalSources = data.total_sources;
-                }
+                if (data && data.total_sources != null) totalSources = Number(data.total_sources) || 0;
             }
         } catch (e) {
             console.error('Failed to fetch map stats:', e);
         }
     }
 
+    async function fetchGdeMetrics() {
+        if (isStaticMode()) return;
+        try {
+            const apiBase = resolveApiBase();
+            const query = `window_hours=${encodeURIComponent(String(gdeWindowHours))}&alpha=${encodeURIComponent(String(gdeAlpha))}`;
+            const res = await fetch(`${apiBase}/api/stats/gde/current?${query}`, { cache: 'no-store' });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.status !== 'error') {
+                    gdeMetrics = {
+                        gde: Number(data.gde) || 0,
+                        shannon_entropy: Number(data.shannon_entropy) || 0,
+                        normalized_shannon: Number(data.normalized_shannon) || 0,
+                        geographic_dispersion_km: Number(data.geographic_dispersion_km) || 0,
+                        normalized_dispersion: Number(data.normalized_dispersion) || 0,
+                        country_count: Number(data.country_count) || 0,
+                        total_visits: Number(data.total_visits) || 0,
+                        window_hours: Number(data.window_hours) || 0,
+                        gini_coefficient: Number(data.gini_coefficient) || 0,
+                        alpha: Number(data.alpha) || 0,
+                    };
+                }
+            }
+        } catch (e) {
+            console.error('Failed to fetch GDE metrics:', e);
+        }
+    }
+
+    function setGdeWindow(hours: number) {
+        gdeWindowHours = hours;
+        fetchGdeMetrics();
+    }
+
+    function setGdeAlpha(alpha: number) {
+        gdeAlpha = alpha;
+        fetchGdeMetrics();
+    }
+
+    async function fetchGrowthMetrics() {
+        if (isStaticMode()) return;
+        try {
+            const apiBase = resolveApiBase();
+            const res = await fetch(`${apiBase}/api/stats/growth/recent?days=7`, { cache: 'no-store' });
+            if (res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data)) {
+                    growthMetrics = data.map(item => ({
+                        day: String(item.day || ''),
+                        media_sources_net: Number(item.media_sources_net) || 0,
+                        candidate_sources_growth_rate: Number(item.candidate_sources_growth_rate) || 0,
+                        news_articles_net: Number(item.news_articles_net) || 0,
+                        media_sources_count: Number(item.media_sources_count) || 0,
+                        candidate_sources_count: Number(item.candidate_sources_count) || 0,
+                        news_articles_count: Number(item.news_articles_count) || 0,
+                    }));
+                }
+            }
+        } catch (e) {
+            console.error('Failed to fetch growth metrics:', e);
+        }
+    }
+
     function formatBigNumber(num: number) {
         if (num >= 1000000) {
-            return (num / 1000000).toFixed(3) + ' M';
+            return (num / 1000000).toFixed(3) + 'M';
         }
         return num.toLocaleString();
+    }
+
+    function formatMetric(value: number | null | undefined, digits = 3) {
+        if (value == null || Number.isNaN(value)) return '—';
+        return value.toFixed(digits);
+    }
+
+    function formatPercent(value: number | null | undefined) {
+        if (value == null || Number.isNaN(value)) return '—';
+        return `${(value * 100).toFixed(2)}%`;
+    }
+
+    function formatAgeSeconds(fromEpochMs: number, nowEpochMs: number) {
+        if (!fromEpochMs) return '—';
+        const sec = Math.max(0, Math.floor((nowEpochMs - fromEpochMs) / 1000));
+        if (sec < 60) return `${sec}s`;
+        const min = Math.floor(sec / 60);
+        if (min < 60) return `${min}m`;
+        const hr = Math.floor(min / 60);
+        return `${hr}h`;
+    }
+
+    function getSystemDotClass(status?: string) {
+        if (status === 'ONLINE') return 'status-dot-ok';
+        if (status === 'DEGRADED') return 'status-dot-warn';
+        if (status === 'OFFLINE') return 'status-dot-error';
+        return 'status-dot-neutral';
+    }
+
+    function scheduleSafetyAutoDisarm() {
+        if (safetyAutoDisarmTimer) clearTimeout(safetyAutoDisarmTimer);
+        safetyAutoDisarmTimer = setTimeout(() => {
+            safetyArmed = false;
+        }, 45000);
+    }
+
+    function toggleSafety() {
+        if (isOffline) return;
+        if (!safetyArmed) {
+            if (isDegraded) {
+                const ok = window.confirm('System is DEGRADED. Arm high-risk controls?');
+                if (!ok) return;
+            }
+            safetyArmed = true;
+            scheduleSafetyAutoDisarm();
+            return;
+        }
+        safetyArmed = false;
+    }
+
+    async function runHighRisk(actionLabel: string, op: () => Promise<void>) {
+        if (isOffline) return;
+        if (!safetyArmed) return;
+        if (isDegraded) {
+            const ok = window.confirm(`DEGRADED risk. Confirm ${actionLabel}?`);
+            if (!ok) return;
+        }
+        scheduleSafetyAutoDisarm();
+        await op();
     }
 
     /**
@@ -463,11 +672,14 @@
      * @param {string} action
      */
     async function controlCrawler(action: string) {
+        if (action === 'stop' || action === 'restart') {
+            const ok = window.confirm(`Confirm crawler ${action.toUpperCase()}?`);
+            if (!ok) return;
+        }
         isCrawlerLoading = true;
         crawlerMessage = '';
         try {
-            // @ts-expect-error vite env typing
-            const apiBase = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
+            const apiBase = resolveApiBase();
             const res = await fetch(`${apiBase}/api/system/crawler/${action}`, { method: 'POST' });
             const data = await res.json();
             if (res.ok) {
@@ -488,9 +700,12 @@
      * Refresh backend thread status to reduce staleness error $\epsilon(t)=\|\hat{s}(t)-s(t)\|$.
      */
     async function refreshStatus() {
+        if (isStaticMode()) {
+            crawlerMessage = 'Static mode: backend operations are disabled.';
+            return;
+        }
         try {
-            // @ts-expect-error vite env typing
-            const apiBase = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
+            const apiBase = resolveApiBase();
             const res = await fetch(`${apiBase}/health/full`);
             if (res.ok) {
                 const data = await res.json();
@@ -507,11 +722,16 @@
      * Trigger auto-recovery policy with single-shot action $u(t)=1$ to mitigate cascading failure.
      */
     async function triggerHeal() {
+        if (isStaticMode()) {
+            crawlerMessage = 'Static mode: autoheal is disabled.';
+            return;
+        }
+        const ok = window.confirm('Confirm forcing autoheal now?');
+        if (!ok) return;
         isCrawlerLoading = true;
         crawlerMessage = 'Initiating self-healing...';
         try {
-            // @ts-expect-error vite env typing
-            const apiBase = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
+            const apiBase = resolveApiBase();
             const res = await fetch(`${apiBase}/api/system/health/autoheal`, { method: 'POST' });
             const data = await res.json();
             crawlerMessage = `Heal Result: ${data.status}`;
@@ -527,34 +747,18 @@
         }
     }
 
-    /**
-     * Fetch narrative metrics and entities, treating divergence as $\Delta = \mu_{T0}-\mu_{T2}$.
-     */
-    async function fetchBrainStats() {
-        brainLoading = true;
-        try {
-            // @ts-expect-error vite env typing
-            const apiBase = import.meta.env.VITE_API_URL ||
-                (window.location.hostname === 'localhost'
-                    ? 'http://localhost:8002'
-                    : 'https://globemediapulse-backend-production.fly.dev');
-            const res = await fetch(`${apiBase}/api/stats/brain`);
-            if (res.ok) {
-                brainStats = await res.json();
-            }
-        } catch (e) {
-            console.error(e);
-        } finally {
-            brainLoading = false;
-        }
-    }
-
     let isCrawlerLoading = false;
     let crawlerMessage = '';
 
     onMount(() => {
+        if (isStaticMode()) {
+            const sources = (DATA as unknown as { MEDIA_SOURCES?: unknown }).MEDIA_SOURCES;
+            totalSources = Array.isArray(sources) ? sources.length : 0;
+            systemStatus.set('STATIC');
+        }
         checkSystemHealth();
-        webSocketService.connect();
+        if (!isStaticMode()) webSocketService.connect();
+        scheduleSidebarAutoCollapse();
 
         const initAudio = () => {
             soundManager.init();
@@ -564,29 +768,92 @@
         window.addEventListener('click', initAudio);
         window.addEventListener('keydown', initAudio);
 
+        const uiClock = setInterval(() => {
+            uiNow = Date.now();
+        }, 1000);
+
+        const handleShortcuts = (e: KeyboardEvent) => {
+            registerSidebarActivity();
+            const target = e.target as HTMLElement | null;
+            const tag = target?.tagName?.toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) return;
+            if (!e.ctrlKey || !e.shiftKey) return;
+
+            const key = e.key.toLowerCase();
+            if (key === 'h') {
+                activeView = 'health';
+                expandedPanel = 'health';
+                expandSidebar();
+                e.preventDefault();
+                return;
+            }
+            if (key === 'a') {
+                activeView = 'autoheal';
+                expandedPanel = 'autoheal';
+                expandSidebar();
+                e.preventDefault();
+                return;
+            }
+            if (key === 'g') {
+                activeView = 'gde';
+                expandedPanel = 'gde';
+                expandSidebar();
+                e.preventDefault();
+                return;
+            }
+            if (key === 'k') {
+                if (expandedPanel !== 'autoheal') return;
+                toggleSafety();
+                e.preventDefault();
+                return;
+            }
+            if (key === 'r') {
+                emitMapCommand('reset_view');
+                e.preventDefault();
+                return;
+            }
+            if (key === 'p') {
+                emitMapCommand('export_png_1200');
+                e.preventDefault();
+                return;
+            }
+            if (key === 's') {
+                emitMapCommand('export_svg_1200');
+                e.preventDefault();
+                return;
+            }
+        };
+        window.addEventListener('keydown', handleShortcuts);
+
+        const handleActivity = () => registerSidebarActivity();
+        window.addEventListener('pointerdown', handleActivity);
+        window.addEventListener('pointermove', handleActivity);
+        window.addEventListener('wheel', handleActivity, { passive: true });
+        window.addEventListener('touchstart', handleActivity, { passive: true });
+        window.addEventListener('focus', handleActivity);
+
         fetchHeaderStats();
         const statsInterval = setInterval(fetchHeaderStats, 60000);
-
-        fetchBrainStats();
-        const brainInterval = setInterval(fetchBrainStats, 60000);
-
-        let frame: number;
-        function loop() {
-            hudX += (mouseX * -15 - hudX) * 0.1;
-            hudY += (mouseY * -15 - hudY) * 0.1;
-            frameX += (mouseX * -5 - frameX) * 0.1;
-            frameY += (mouseY * -5 - frameY) * 0.1;
-            frame = requestAnimationFrame(loop);
-        }
-        loop();
+        fetchGdeMetrics();
+        fetchGrowthMetrics();
+        const gdeInterval = setInterval(fetchGdeMetrics, 60000);
+        const growthInterval = setInterval(fetchGrowthMetrics, 300000);
 
         return () => {
-            cancelAnimationFrame(frame);
             clearTimeout(healthCheckTimer);
             clearInterval(statsInterval);
-            clearInterval(brainInterval);
-            window.removeEventListener('mousemove', handleDrag);
-            window.removeEventListener('mouseup', stopDrag);
+            clearInterval(gdeInterval);
+            clearInterval(growthInterval);
+            clearInterval(uiClock);
+            window.removeEventListener('keydown', handleShortcuts);
+            window.removeEventListener('pointerdown', handleActivity);
+            window.removeEventListener('pointermove', handleActivity);
+            window.removeEventListener('wheel', handleActivity);
+            window.removeEventListener('touchstart', handleActivity);
+            window.removeEventListener('focus', handleActivity);
+            if (sidebarIdleTimer) clearTimeout(sidebarIdleTimer);
+            if (sidebarScrollTimer) clearTimeout(sidebarScrollTimer);
+            if (safetyAutoDisarmTimer) clearTimeout(safetyAutoDisarmTimer);
         };
     });
 
@@ -595,589 +862,571 @@
     });
 
     function getStatusColor(status?: string) {
-        if (status === 'ok' || status === 'running' || status === 'active') return 'text-green-400';
-        if (status === 'degraded' || status === 'warning') return 'text-yellow-400';
-        if (status === 'disabled' || status === 'unknown') return 'text-gray-400';
-        return 'text-red-400';
+        const value = String(status || '').toLowerCase();
+        if (!value || value === 'unknown') return 'status-text-neutral';
+        if (value === 'ok' || value === 'running' || value === 'active') return 'status-text-ok';
+        if (value === 'disabled' || value === 'idle') return 'status-text-neutral';
+        if (value === 'restarting' || value === 'starting' || value === 'warning' || value === 'degraded' || value === 'waiting')
+            return 'status-text-warn';
+        if (value === 'stalled' || value === 'stopped' || value === 'error' || value === 'failed' || value === 'offline')
+            return 'status-text-error';
+        return 'status-text-error';
     }
 
-    function getLevelColor(level?: string) {
-        switch (level) {
-            case 'INFO': return 'text-green-400';
-            case 'WARNING': return 'text-yellow-400';
-            case 'ERROR': return 'text-red-500 font-bold';
-            case 'CRITICAL': return 'text-red-600 font-bold bg-white/10';
-            case 'DEBUG': return 'text-blue-400';
-            case 'TRACE': return 'text-purple-400';
-            default: return 'text-gray-400';
-        }
+    function getThreadStatusColor(status?: string) {
+        return getStatusColor(status);
     }
 
-    function getSubTypeStyle(subType?: string) {
-        if (!subType) return '';
-        if (subType.includes('START')) return 'text-cyan-400 font-bold';
-        if (subType.includes('COMPLETE')) return 'text-green-400 font-bold';
-        if (subType.includes('FAIL')) return 'text-red-400 font-bold';
-        if (subType.includes('WHOIS')) return 'text-yellow-300';
-        if (subType.includes('NLP')) return 'text-pink-300';
-        if (subType.includes('STEP')) return 'text-blue-300 italic';
-        if (subType.includes('CONSENSUS')) return 'text-purple-300';
-        return 'text-gray-300';
-    }
-
-    function formatDetails(details: unknown) {
-        if (!details) return [];
-        if (typeof details === 'string') return [details];
-        if (Array.isArray(details)) return details;
-        return [JSON.stringify(details)];
+    function getSystemIconClass(status?: string) {
+        if (status === 'ONLINE') return 'sidebar-text-muted';
+        if (status === 'DEGRADED') return 'text-yellow-400';
+        if (status === 'OFFLINE') return 'text-red-500';
+        return 'sidebar-text-dim';
     }
 </script>
 
-<svelte:window on:mousemove={handleMouseMove} />
-
-<main class="relative w-full h-screen overflow-hidden bg-tech-dark text-white font-tech selection:bg-neon-blue/30 perspective-1000">
-    <!-- Initial Loading Overlay -->
+<main class="w-full h-screen bg-slate-950 text-slate-100 font-serif selection:bg-slate-600/40">
     {#if isLoading}
-        <div class="absolute inset-0 z-[10000] bg-black flex flex-col items-center justify-center transition-opacity duration-1000" class:opacity-0={!isLoading}>
-            <div class="relative w-24 h-24">
-                <div class="absolute inset-0 border-t-2 border-neon-blue rounded-full animate-spin"></div>
-                <div class="absolute inset-2 border-r-2 border-neon-purple rounded-full animate-spin-slow"></div>
-                <div class="absolute inset-0 flex items-center justify-center">
-                    <span class="text-2xl animate-pulse">🌐</span>
-                </div>
-            </div>
-            <div class="mt-8 font-mono text-neon-blue tracking-[0.5em] text-sm animate-pulse">INITIALIZING SYSTEM...</div>
-            <div class="mt-2 font-mono text-white/50 text-xs">ESTABLISHING SATELLITE LINK</div>
+        <div class="fixed inset-0 z-[10000] bg-slate-950 flex items-center justify-center">
+            <div class="text-xs font-mono tracking-widest text-slate-300">Initializing…</div>
         </div>
     {/if}
 
-    <!-- CRT Effects -->
-    <div class="scanline opacity-20"></div>
-    <div class="absolute inset-0 pointer-events-none z-[9999] shadow-[inset_0_0_100px_rgba(0,0,0,0.5)] mix-blend-multiply"></div> <!-- Vignette (Lighter) -->
-    <!-- Glass Reflection / Atmosphere -->
-    <div class="absolute inset-0 pointer-events-none z-[5] bg-radial-gradient from-transparent via-transparent to-neon-blue/5 opacity-50"></div>
-    
-    <!-- Map Layer (Background - Static) -->
-    <div class="absolute inset-0 w-full h-full z-0 pointer-events-auto">
-        <MapContainer />
-    </div>
+    <div class="h-full min-h-0 relative">
+        <section class="absolute inset-0 bg-slate-950">
+            <MapContainer />
+        </section>
 
-    <!-- HUD Layer -->
-    <div class="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-4 transition-transform will-change-transform"
-         style="transform: translate({hudX}px, {hudY}px) rotateX({-hudY * 0.05}deg) rotateY({hudX * 0.05}deg)">
-        
-        <!-- Perimeter HUD Frame -->
-        <div class="absolute inset-4 border border-white/5 pointer-events-none rounded-lg"
-             style="transform: translate({frameX - hudX}px, {frameY - hudY}px)">
-            <!-- Top Left Corner -->
-            <div class="absolute -top-[1px] -left-[1px] w-8 h-8 border-t-2 border-l-2 border-neon-blue/50 rounded-tl-lg"></div>
-            <!-- Top Right Corner -->
-            <div class="absolute -top-[1px] -right-[1px] w-8 h-8 border-t-2 border-r-2 border-neon-blue/50 rounded-tr-lg"></div>
-            
-            <!-- Bottom Left Corner -->
-            <div class="absolute -bottom-[1px] -left-[1px] w-8 h-8 border-b-2 border-l-2 border-neon-blue/50 rounded-bl-lg"></div>
-            <!-- Bottom Right Corner -->
-            <div class="absolute -bottom-[1px] -right-[1px] w-8 h-8 border-b-2 border-r-2 border-neon-blue/50 rounded-br-lg"></div>
-            
-            <!-- Side Rulers (Decorative) -->
-            <div class="absolute top-1/2 left-0 -translate-y-1/2 flex flex-col gap-2 opacity-30">
-                {#each Array.from({ length: 10 }, (_, i) => i) as i (i)}
-                    <div class="w-2 h-[1px] bg-white"></div>
-                {/each}
-            </div>
-            <div class="absolute top-1/2 right-0 -translate-y-1/2 flex flex-col gap-2 items-end opacity-30">
-                {#each Array.from({ length: 10 }, (_, i) => i) as i (i)}
-                    <div class="w-2 h-[1px] bg-white"></div>
-                {/each}
-            </div>
-
-            <!-- Center Crosshair -->
-            <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 border border-white/10 opacity-20 flex items-center justify-center">
-                <div class="w-[1px] h-full bg-white/30"></div>
-                <div class="h-[1px] w-full bg-white/30 absolute"></div>
-            </div>
-        </div>
-
-        <!-- Top: Header -->
-        <div class="flex flex-col items-center w-full z-20">
-            <header class="w-full h-20 flex items-center justify-between px-6 z-50 pointer-events-auto bg-[#0f172a]/85 border-b border-white/25 backdrop-blur-md select-none shadow-[0_8px_32px_rgba(0,0,0,0.5),inset_0_0_20px_rgba(255,255,255,0.08)]">
-                <div class="flex items-center gap-4">
-                    <div class="relative w-12 h-12 flex items-center justify-center">
-                        <div class="absolute inset-0 rounded-full border border-neon-blue/30 animate-spin-slow"></div>
-                        <div class="absolute w-8 h-8 rounded-full bg-neon-blue/10 animate-pulse border border-neon-blue/50 flex items-center justify-center">
-                            <div class="w-4 h-4 bg-neon-blue/80 rounded-full shadow-[0_0_15px_#00f3ff]"></div>
-                        </div>
-                        <div class="absolute inset-0 rounded-full border-t-2 border-neon-blue/80 animate-spin shadow-[0_0_10px_#00f3ff]"></div>
-                    </div>
-                    <div class="flex flex-col">
-                        <h1 class="text-2xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-white via-neon-blue to-neon-purple drop-shadow-[0_0_10px_rgba(0,243,255,0.5)] font-tech">
-                            GLOBE MEDIA PULSE
-                        </h1>
-                        <span class="text-xs tracking-[0.2em] text-neon-blue/80 font-mono font-bold">Uncharted Pulse of Global Media</span>
-                    </div>
-                </div>
-
-                <div class="hidden lg:flex items-center gap-2 opacity-40">
-                    <div class="w-24 h-[1px] bg-gradient-to-r from-transparent via-white to-transparent"></div>
-                    <div class="w-2 h-2 border border-white rotate-45 animate-pulse"></div>
-                    <div class="w-24 h-[1px] bg-gradient-to-r from-transparent via-white to-transparent"></div>
-                </div>
-
-                <div class="flex items-center gap-4">
-                    <div class="hidden md:flex items-center gap-3 border-r border-white/10 pr-4">
-                        <div class="flex flex-col items-end">
-                            <span class="text-[10px] text-neon-blue/70 font-mono tracking-widest uppercase">SOURCES</span>
-                            <span class="text-xl font-mono font-bold text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)] flex items-center gap-2">
-                                <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                                {formatBigNumber(totalSources)}
-                            </span>
-                        </div>
-                    </div>
-                </div>
-            </header>
-        </div>
-
-        <!-- Middle: Floating Windows Space -->
-        <div class="flex-1 relative w-full h-full pointer-events-none">
-            {#each windows as win (win.id)}
-                {#if $windowState[win.id]?.visible}
-                    <div 
-                        class="fixed bg-[#050a14]/85 backdrop-blur-2xl border border-white/15 ring-1 ring-white/5 shadow-[0_10px_50px_rgba(0,0,0,0.8)] rounded-xl overflow-hidden flex flex-col transition-shadow duration-300 pointer-events-auto"
-                        class:ring-neon-blue={isDragging && draggingId === win.id}
-                        class:shadow-[0_0_30px_rgba(0,243,255,0.15)]={isDragging && draggingId === win.id}
-                        style="top: {$windowState[win.id].position.y}px; left: {$windowState[win.id].position.x}px; width: {win.width}; height: {win.height}; z-index: {$windowState[win.id].zIndex || 10}; transform-origin: top left;"
-                        on:mousedown={() => bringToFront(win.id)}
-                        role="dialog"
-                        aria-label={win.title}
-                        tabindex="0"
-                    >
-                        <div 
-                            class="h-11 bg-gradient-to-r from-white/10 via-white/5 to-transparent border-b border-white/10 flex items-center justify-between px-4 cursor-move select-none relative overflow-hidden"
-                            on:mousedown={(e) => startDrag(win.id, e)}
-                            role="button"
-                            aria-label={`Drag ${win.title}`}
-                            tabindex="0"
-                        >
-                            <div class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/20 to-transparent"></div>
-                            <div class="flex items-center gap-3 text-cyan-400 font-mono text-sm tracking-widest relative z-10">
-                                <span class="text-lg opacity-80 drop-shadow-[0_0_5px_rgba(34,211,238,0.5)]">{win.icon}</span>
-                                <span class="font-bold drop-shadow-md">{win.title}</span>
-                            </div>
-                            <div class="flex items-center gap-2">
-                                <button 
-                                    class="w-6 h-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
-                                    on:click={() => toggleMinimize(win.id)}
-                                    title={$windowState[win.id].minimized ? 'Restore' : 'Minimize'}
-                                >
-                                    <span class="material-icons-round text-sm">
-                                        {$windowState[win.id].minimized ? 'open_in_full' : 'minimize'}
+        <aside
+            class="absolute inset-y-0 left-0 z-[200] min-h-0 sidebar-shell shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] overflow-hidden"
+            style="width: {sidebarCollapsed ? '56px' : '320px'};"
+            on:mouseenter={() => setSidebarHovering(true)}
+            on:mouseleave={() => setSidebarHovering(false)}
+        >
+            <div class="h-full min-h-0 flex flex-col">
+                <div class="h-12 px-2 flex items-center sidebar-top">
+                    <div class="flex items-center gap-2 min-w-0 flex-1">
+                        {#if sidebarCollapsed}
+                            <button
+                                class="w-9 h-9 rounded flex items-center justify-center sidebar-hoverable sidebar-icon-muted"
+                                on:click={expandSidebar}
+                                title="Expand Sidebar"
+                            >
+                                <span class="material-icons-round text-[18px]">chevron_right</span>
+                            </button>
+                        {:else}
+                            <button
+                                class="w-9 h-9 rounded flex items-center justify-center sidebar-hoverable sidebar-icon-muted"
+                                on:click={() => collapseSidebar(false)}
+                                title="Collapse Sidebar"
+                            >
+                                <span class="material-icons-round text-[18px]">chevron_left</span>
+                            </button>
+                        {/if}
+                        {#if !sidebarCollapsed}
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2 min-w-0">
+                                    <span class="w-6 h-6 rounded sidebar-panel-sub border sidebar-border flex items-center justify-center sidebar-text shrink-0">
+                                        <span class="material-icons-round text-[16px]">public</span>
                                     </span>
-                                </button>
-                                <button 
-                                    class="w-6 h-6 flex items-center justify-center rounded hover:bg-red-500/20 text-gray-400 hover:text-red-400 transition-colors"
-                                    on:click={() => closeWindow(win.id)}
-                                    title="Close"
-                                >
-                                    <span class="material-icons-round text-sm">close</span>
-                                </button>
-                            </div>
-                        </div>
-
-                        {#if !$windowState[win.id].minimized}
-                            <div class="flex-1 min-h-0 overflow-hidden bg-transparent p-3 text-gray-300 font-mono text-sm">
-                                {#if win.id === 'systemMonitor'}
-                                    <div class="h-full min-h-0 flex flex-col">
-                                        <div class="flex border-b border-white/10 mb-4">
-                                            <button class="px-3 py-2 text-xs font-bold uppercase transition-colors flex items-center gap-1 {activeTab === 'health' ? 'text-neon-blue border-b-2 border-neon-blue' : 'text-gray-500 hover:text-white'}"
-                                                    on:click={() => activeTab = 'health'}>
-                                                <span class="material-icons-round text-[12px]">monitor_heart</span>
-                                                Health
-                                            </button>
-                                            <button class="px-3 py-2 text-xs font-bold uppercase transition-colors flex items-center gap-1 {activeTab === 'logs' ? 'text-neon-blue border-b-2 border-neon-blue' : 'text-gray-500 hover:text-white'}"
-                                                    on:click={() => activeTab = 'logs'}>
-                                                <span class="material-icons-round text-[12px]">terminal</span>
-                                                Logs
-                                            </button>
-                                            <button class="px-3 py-2 text-xs font-bold uppercase transition-colors flex items-center gap-1 {activeTab === 'controls' ? 'text-neon-blue border-b-2 border-neon-blue' : 'text-gray-500 hover:text-white'}"
-                                                    on:click={() => activeTab = 'controls'}>
-                                                <span class="material-icons-round text-[12px]">tune</span>
-                                                Controls
-                                            </button>
-                                        </div>
-
-                                        <div class="flex-1 min-h-0 overflow-hidden overflow-y-hidden pr-1 pl-1">
-                                            {#if activeTab === 'health'}
-                                                <div class="h-full overflow-hidden space-y-4">
-                                                    <div class="bg-white/5 p-3 rounded border border-white/10">
-                                                        <h4 class="text-neon-blue font-bold text-xs uppercase mb-2 flex items-center gap-2">
-                                                            <span class="material-icons-round text-sm">dns</span>
-                                                            System Health
-                                                        </h4>
-
-                                                        <div class="mb-3">
-                                                            <div class="text-[10px] text-gray-400 mb-1 font-mono uppercase">Infrastructure</div>
-                                                            <div class="grid grid-cols-2 gap-2 text-xs">
-                                                                <div class="flex justify-between bg-black/20 p-1.5 rounded">
-                                                                    <span class="flex items-center gap-1">
-                                                                        <span class="material-icons-round text-[10px] text-neon-blue/70">storage</span>
-                                                                        Postgres
-                                                                    </span>
-                                                                    <span class="font-mono {getStatusColor($serviceStatus.postgres)}">{$serviceStatus.postgres?.toUpperCase() || 'UNK'}</span>
-                                                                </div>
-                                                                <div class="flex justify-between bg-black/20 p-1.5 rounded">
-                                                                    <span class="flex items-center gap-1">
-                                                                        <span class="material-icons-round text-[10px] text-neon-blue/70">bolt</span>
-                                                                        Redis
-                                                                    </span>
-                                                                    <span class="font-mono {getStatusColor($serviceStatus.redis)}">{$serviceStatus.redis?.toUpperCase() || 'UNK'}</span>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-
-                                                        <div>
-                                                            <div class="text-[10px] text-gray-400 mb-1 font-mono uppercase">Active Threads</div>
-                                                            <div class="space-y-1 text-xs">
-                                                                <div class="flex justify-between bg-black/20 p-1.5 rounded border-l-2 border-neon-blue">
-                                                                    <span class="flex items-center gap-1">
-                                                                        <span class="material-icons-round text-[10px] text-neon-blue/70">public</span>
-                                                                        News Crawler
-                                                                    </span>
-                                                                    <span class="font-mono {getStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</span>
-                                                                </div>
-                                                                <div class="flex justify-between bg-black/20 p-1.5 rounded border-l-2 border-purple-500">
-                                                                    <span class="flex items-center gap-1">
-                                                                        <span class="material-icons-round text-[10px] text-purple-300">psychology</span>
-                                                                        AI Analyzer
-                                                                    </span>
-                                                                    <span class="font-mono {getStatusColor($backendThreadStatus.analyzer)}">{$backendThreadStatus.analyzer?.toUpperCase() || 'UNK'}</span>
-                                                                </div>
-                                                                <div class="flex justify-between bg-black/20 p-1.5 rounded border-l-2 border-gray-500">
-                                                                    <span class="flex items-center gap-1">
-                                                                        <span class="material-icons-round text-[10px] text-gray-300">delete_sweep</span>
-                                                                        System Cleanup
-                                                                    </span>
-                                                                    <span class="font-mono {getStatusColor($backendThreadStatus.cleanup)}">{$backendThreadStatus.cleanup?.toUpperCase() || 'UNK'}</span>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-
-                                                        <div class="mt-3">
-                                                            <div class="flex items-center justify-between mb-2">
-                                                                <div class="text-[10px] text-gray-400 font-mono uppercase">Flag Diagnostics</div>
-                                                                <button
-                                                                    class="text-[10px] font-mono px-2 py-1 rounded bg-black/20 border border-white/10 hover:bg-black/30 transition-colors"
-                                                                    on:click={() => showFlagDiagnostics = !showFlagDiagnostics}
-                                                                >
-                                                                    {showFlagDiagnostics ? 'HIDE' : 'SHOW'}
-                                                                </button>
-                                                            </div>
-
-                                                            {#if showFlagDiagnostics}
-                                                                <div class="grid grid-cols-2 gap-2 text-xs">
-                                                                    {#each flagDiagnosticAlpha2 as alpha2 (alpha2)}
-                                                                        <div class="flex items-center justify-between bg-black/20 p-1.5 rounded">
-                                                                            <span class="flex items-center gap-2">
-                                                                                <span class="fi fi-{alpha2.toLowerCase()} gmp-flag opacity-80" aria-label={alpha2}></span>
-                                                                                <span class="font-mono tracking-wider">{alpha2}</span>
-                                                                            </span>
-                                                                            <span class="text-[10px] text-gray-500">fi-{alpha2.toLowerCase()}</span>
-                                                                        </div>
-                                                                    {/each}
-                                                                </div>
-                                                            {/if}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            {:else if activeTab === 'logs'}
-                                                <div class="flex flex-col h-full min-h-0 bg-black/95 font-mono text-[10px] p-2 rounded border border-green-500/30 overflow-hidden shadow-[inset_0_0_20px_rgba(0,50,0,0.2)]" data-testid="system-logs">
-                                                    <div class="flex justify-between items-center mb-2 pb-2 border-b border-green-500/30 bg-black/40 -mx-2 px-2 pt-1">
-                                                        <h4 class="text-neon-blue font-bold uppercase flex items-center gap-2 tracking-wider">
-                                                            <span class="material-icons-round text-sm animate-pulse text-green-500">terminal</span>
-                                                            <span class="text-green-500">GEOPARSING OPS CENTER</span>
-                                                        </h4>
-                                                        <div class="flex items-center gap-2">
-                                                            <div class="flex gap-1">
-                                                                <div class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
-                                                                <div class="w-1.5 h-1.5 rounded-full bg-green-500/50 animate-pulse delay-75"></div>
-                                                                <div class="w-1.5 h-1.5 rounded-full bg-green-500/30 animate-pulse delay-150"></div>
-                                                            </div>
-                                                            <span class="text-xs text-green-500/70">{$systemLogs.length} OPS</span>
-                                                        </div>
-                                                    </div>
-
-                                                    <div bind:this={logContainer} class="flex-1 overflow-y-auto space-y-0.5 font-mono leading-tight pr-1" data-testid="system-logs-scroll">
-                                                        {#each $systemLogs as log (log.timestamp + Math.random())}
-                                                            <div class="group flex flex-col gap-0.5 hover:bg-green-500/5 transition-colors px-1 py-1 border-l-[3px] border-b border-white/5"
-                                                                 class:border-transparent={!log.level || log.level === 'INFO'}
-                                                                 class:border-l-red-500={log.level === 'ERROR' || log.level === 'CRITICAL'}
-                                                                 class:border-l-yellow-500={log.level === 'WARNING'}
-                                                                 class:border-l-cyan-500={log.sub_type && log.sub_type.includes('START')}
-                                                                 class:border-l-green-500={log.sub_type && log.sub_type.includes('COMPLETE')}>
-
-                                                                <div class="flex gap-2 items-center">
-                                                                    <span class="text-gray-600 min-w-[50px] opacity-70">{new Date(log.timestamp * 1000).toLocaleTimeString([], {hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit'})}</span>
-                                                                    {#if log.sub_type}
-                                                                        <span class="min-w-[80px] text-right {getSubTypeStyle(log.sub_type)}">[{log.sub_type}]</span>
-                                                                    {:else}
-                                                                        <span class="min-w-[40px] text-right {getLevelColor(log.level)}">[{log.level || 'INFO'}]</span>
-                                                                    {/if}
-                                                                    <span class="text-gray-300 break-all flex-1 font-bold">
-                                                                        {#if log.data && log.data.domain}
-                                                                            <span class="text-white">TARGET: {log.data.domain}</span>
-                                                                        {:else}
-                                                                            {log.message}
-                                                                        {/if}
-                                                                    </span>
-                                                                </div>
-
-                                                                {#if log.data}
-                                                                    <div class="pl-[140px] text-gray-400 flex flex-col gap-0.5">
-                                                                        {#if log.data.step}
-                                                                            <div class="flex items-center gap-2 text-cyan-300">
-                                                                                <span class="material-icons-round text-[10px]">arrow_right</span>
-                                                                                <span class="uppercase text-[9px] border border-cyan-500/30 px-1 rounded">{log.data.step}</span>
-                                                                                <span class="text-gray-300">{log.data.message}</span>
-                                                                            </div>
-                                                                        {/if}
-
-                                                                        {#if log.data.result}
-                                                                            <div class="flex items-center gap-2 mt-1">
-                                                                                <span class="text-green-400 font-bold">>> LOCKED: {log.data.result}</span>
-                                                                                <span class="text-xs border border-green-500/50 px-1 rounded text-green-300 bg-green-900/20">CONFIDENCE: {log.data.confidence?.toUpperCase()}</span>
-                                                                            </div>
-                                                                        {/if}
-
-                                                                        {#if log.data.details}
-                                                                            <div class="mt-1 pl-2 border-l border-gray-700 space-y-0.5">
-                                                                                {#each formatDetails(log.data.details) as detail, index (index)}
-                                                                                    <div class="text-[9px] text-gray-500 flex items-center gap-1">
-                                                                                        <span class="w-1 h-1 bg-gray-600 rounded-full"></span>
-                                                                                        {detail}
-                                                                                    </div>
-                                                                                {/each}
-                                                                            </div>
-                                                                        {/if}
-
-                                                                        {#if log.data.error}<span class="text-red-400 bg-red-900/20 px-1">ERROR: {log.data.error}</span>{/if}
-                                                                    </div>
-                                                                {/if}
-                                                            </div>
-                                                        {/each}
-
-                                                        {#if $systemLogs.length === 0}
-                                                            <div class="flex flex-col items-center justify-center h-full opacity-30">
-                                                                <span class="material-icons-round text-4xl mb-2">satellite_alt</span>
-                                                                <span class="text-xs tracking-widest">AWAITING TELEMETRY...</span>
-                                                            </div>
-                                                        {/if}
-
-                                                        <div class="h-4 flex items-center pl-1">
-                                                            <span class="w-2 h-4 bg-neon-blue/50 animate-pulse"></span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            {:else if activeTab === 'controls'}
-                                                <div class="flex flex-col h-full min-h-0 gap-2 overflow-hidden overflow-y-hidden" data-testid="system-controls">
-                                                    <div class="bg-white/5 p-1.5 rounded border border-white/10 flex-1 min-h-0 overflow-hidden">
-                                                        <h4 class="text-neon-pink font-bold text-xs uppercase mb-2 flex items-center gap-2">
-                                                            <span class="material-icons-round text-sm">bug_report</span>
-                                                            Crawler Control
-                                                        </h4>
-
-                                                        <div class="grid grid-cols-3 gap-2 mb-2">
-                                                            <button class="flex flex-col items-center justify-center p-2 rounded bg-white/5 hover:bg-white/10 transition-all border border-white/10 text-[10px] font-bold text-green-400 hover:border-green-400/50 disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => controlCrawler('start')} disabled={isCrawlerLoading || $backendThreadStatus.crawler === 'running'}>
-                                                                <span class="material-icons-round text-sm">play_arrow</span> START
-                                                            </button>
-                                                            <button class="flex flex-col items-center justify-center p-2 rounded bg-white/5 hover:bg-white/10 transition-all border border-white/10 text-[10px] font-bold text-red-400 hover:border-red-400/50 disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => controlCrawler('stop')} disabled={isCrawlerLoading || $backendThreadStatus.crawler !== 'running'}>
-                                                                <span class="material-icons-round text-sm">stop</span> STOP
-                                                            </button>
-                                                            <button class="flex flex-col items-center justify-center p-2 rounded bg-white/5 hover:bg-white/10 transition-all border border-white/10 text-[10px] font-bold text-yellow-400 hover:border-yellow-400/50 disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => controlCrawler('restart')} disabled={isCrawlerLoading}>
-                                                                <span class="material-icons-round text-sm">restart_alt</span> RESTART
-                                                            </button>
-                                                        </div>
-
-                                                        <div class="text-[10px] font-mono text-gray-400 bg-black/30 p-1.5 rounded min-h-[28px]">
-                                                            {#if isCrawlerLoading}
-                                                                <span class="animate-pulse">Processing command...</span>
-                                                            {:else}
-                                                                {crawlerMessage || 'Ready for command.'}
-                                                            {/if}
-                                                        </div>
-                                                    </div>
-
-                                                    <div class="bg-white/5 p-1.5 rounded border border-white/10 flex-1 min-h-0 overflow-hidden">
-                                                        <h4 class="text-purple-400 font-bold text-xs uppercase mb-2 flex items-center gap-2">
-                                                            <span class="material-icons-round text-sm">health_and_safety</span>
-                                                            System Guardian
-                                                        </h4>
-
-                                                        <div class="flex justify-between items-center bg-black/20 p-1.5 rounded mb-2">
-                                                            <div class="text-xs text-gray-300">Auto-Recovery Protocol</div>
-                                                            <button class="px-2 py-1 bg-purple-500/20 text-purple-400 border border-purple-500/50 rounded text-[10px] hover:bg-purple-500/40 flex items-center gap-1"
-                                                                    on:click={triggerHeal}
-                                                                    disabled={isCrawlerLoading}>
-                                                                <span class="material-icons-round text-[12px]">auto_fix_high</span>
-                                                                FORCE HEAL
-                                                            </button>
-                                                        </div>
-
-                                                        <div class="text-[10px] text-gray-500 flex items-center gap-2">
-                                                            <span>Current Status:</span>
-                                                            <span class="flex items-center gap-1">
-                                                                <span class="material-icons-round text-[11px]"
-                                                                      class:text-green-400={$backendThreadStatus.crawler === 'running'}
-                                                                      class:text-red-400={$backendThreadStatus.crawler !== 'running'}>
-                                                                    {$backendThreadStatus.crawler === 'running' ? 'power' : 'power_settings_new'}
-                                                                </span>
-                                                                <span class:text-green-400={$backendThreadStatus.crawler === 'running'}
-                                                                      class:text-red-400={$backendThreadStatus.crawler !== 'running'}>
-                                                                    CRAWLER: {$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}
-                                                                </span>
-                                                            </span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            {/if}
-                                        </div>
-                                    </div>
-                                {:else if win.id === 'brain'}
-                                    <div class="h-full flex flex-col space-y-4">
-                                        <div class="bg-white/5 p-3 rounded">
-                                            <h4 class="text-neon-pink font-bold text-xs uppercase mb-2">Narrative Conflict Monitor</h4>
-                                            <div class="flex justify-between items-center text-xs mb-2">
-                                                <span>Divergence:</span>
-                                                <span class="font-bold {divergenceColor}">{(brainStats?.narrative_divergence?.divergence || 0).toFixed(2)}</span>
-                                            </div>
-
-                                            <div class="space-y-1">
-                                                <div class="flex justify-between text-[10px] text-gray-400">
-                                                    <span>Tier-0 (Global)</span>
-                                                    <span>{(brainStats?.narrative_divergence?.tier_0_sentiment || 0).toFixed(2)}</span>
-                                                </div>
-                                                <div class="w-full bg-white/10 h-1 rounded overflow-hidden">
-                                                    <div class="h-full bg-blue-500" style="width: {((brainStats?.narrative_divergence?.tier_0_sentiment || 0) + 1) * 50}%"></div>
-                                                </div>
-
-                                                <div class="flex justify-between text-[10px] text-gray-400 mt-2">
-                                                    <span>Tier-2 (Local)</span>
-                                                    <span>{(brainStats?.narrative_divergence?.tier_2_sentiment || 0).toFixed(2)}</span>
-                                                </div>
-                                                <div class="w-full bg-white/10 h-1 rounded overflow-hidden">
-                                                    <div class="h-full bg-green-500" style="width: {((brainStats?.narrative_divergence?.tier_2_sentiment || 0) + 1) * 50}%"></div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div class="bg-white/5 p-3 rounded">
-                                            <h4 class="text-yellow-400 font-bold text-xs uppercase mb-2">Top Entities (24h)</h4>
-                                            <div class="flex flex-wrap gap-2">
-                                                {#each (brainStats?.top_entities || []) as entity (entity)}
-                                                    <span class="px-2 py-1 bg-white/10 rounded text-[10px] text-gray-300 border border-white/5">
-                                                        {entity}
-                                                    </span>
-                                                {/each}
-                                            </div>
-                                            {#if brainLoading}
-                                                <div class="text-[10px] text-gray-500 mt-2">Loading…</div>
-                                            {/if}
-                                        </div>
-                                    </div>
-                                {/if}
+                                    <div class="text-xs font-semibold tracking-wide truncate">Globe Media Pulse</div>
+                                </div>
                             </div>
                         {/if}
                     </div>
-                {/if}
-            {/each}
-        </div>
+                </div>
 
-        <!-- Bottom: Command Bar -->
-        <div class="w-full flex justify-center pb-4 pointer-events-auto">
-            <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-auto select-none flex flex-col items-center gap-2 transition-all duration-700 ease-in-out">
-                <div class="
-                    h-14 
-                    {isExpanded ? 'px-4 w-auto' : 'px-2 w-14 justify-center'} 
-                    bg-[#0f172a]/85 backdrop-blur-md rounded-full border border-white/25 shadow-[0_8px_32px_rgba(0,0,0,0.5),inset_0_0_20px_rgba(255,255,255,0.08)] 
-                    flex items-center gap-4 relative overflow-hidden group transition-all duration-500 hover:bg-[#0f172a]/95
-                ">
-                    <div class="absolute inset-0 bg-gradient-to-r from-neon-blue/20 via-transparent to-neon-pink/20 pointer-events-none rounded-full blur-md opacity-50 group-hover:opacity-80 transition-opacity"></div>
-
-                    {#if !isExpanded}
-                        <button 
-                            class="w-10 h-10 rounded-full flex items-center justify-center text-neon-blue/80 hover:text-neon-blue hover:bg-white/10 transition-all"
-                            on:click={() => isExpanded = true}
-                            title="Expand Control Bar"
+                <nav class="flex-1 min-h-0 overflow-y-auto px-1 py-2 flex flex-col gap-1" on:scroll={handleSidebarScroll}>
+                    {#if !sidebarCollapsed}
+                        <button
+                            type="button"
+                            class="mx-1 mt-1 px-2 py-1 rounded sidebar-panel border sidebar-border text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-1.5"
+                            on:click={toggleStatusPanel}
                         >
-                            <span class="material-icons-round text-xl">menu</span>
+                            <span class="material-icons-round text-[14px] {getSystemTitleClass()}">monitor_heart</span><span class={getSystemTitleClass()}>Status</span>
+                            <span class="ml-auto material-icons-round text-[16px] sidebar-icon-dim">{statusPanelExpanded ? 'expand_less' : 'expand_more'}</span>
                         </button>
                     {/if}
-
-                    {#if isExpanded}
-                        <button 
-                            class="flex items-center gap-1 bg-white/10 rounded-full p-0.5 border border-white/10 hover:bg-white/20 hover:border-white/30 transition-all cursor-pointer group shrink-0"
-                            title="Toggle System Monitor"
-                            on:click={() => toggleWindow('systemMonitor')}
+                    {#if sidebarCollapsed}
+                        <button
+                            type="button"
+                            class="rounded flex items-center gap-2 px-2 sidebar-panel border sidebar-border min-w-0 overflow-hidden h-10 justify-center"
+                            title={statusSummary}
+                            on:click={expandSidebar}
                         >
-                            <div class="h-7 px-2 rounded-full flex items-center gap-1.5 justify-center">
-                                {#if $systemStatus === 'OFFLINE'}
-                                    <div class="w-1.5 h-1.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)] animate-pulse"></div>
-                                    <span class="material-icons-round text-[12px] text-red-500/80">power_settings_new</span>
-                                    <span class="text-[10px] font-mono text-red-500/80 font-bold tracking-wider group-hover:text-red-400">OFFLINE</span>
-                                {:else if $systemStatus === 'DEGRADED'}
-                                    <div class="w-1.5 h-1.5 rounded-full bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.8)] animate-pulse"></div>
-                                    <span class="material-icons-round text-[12px] text-yellow-500/80">report_problem</span>
-                                    <span class="text-[10px] font-mono text-yellow-500/80 font-bold tracking-wider group-hover:text-yellow-400">DEGRADED</span>
-                                {:else}
-                                    <div class="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] animate-pulse"></div>
-                                    <span class="material-icons-round text-[12px] text-emerald-500/80">check_circle</span>
-                                    <span class="text-[10px] font-mono text-emerald-500/80 font-bold tracking-wider group-hover:text-emerald-400">ONLINE</span>
+                            <span class="w-2 h-2 rounded-full {getSystemDotClass($systemStatus)}"></span>
+                            <span class="material-icons-round text-[18px] {getSystemIconClass($systemStatus)}">monitor_heart</span>
+                        </button>
+                    {:else if statusPanelExpanded}
+                        <div class="mx-1 mb-1 space-y-1">
+                            {#if isSystemCritical}
+                                <button
+                                    type="button"
+                                    class={`flex items-center gap-2 px-2 py-1 rounded border sidebar-panel-soft ${getSystemSlotClass()}`}
+                                    on:click={openDiagnosticPanel}
+                                >
+                                    <span class="material-icons-round text-[14px] {getSystemIconClass($systemStatus)}">healing</span>
+                                    <span class="text-[10px] font-mono tracking-widest flex-1">诊断直达</span>
+                                    <span class="text-[10px] font-mono tracking-widest">{isOffline ? 'Health' : 'Autoheal'}</span>
+                                </button>
+                            {/if}
+                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSystemSlotClass()}`}>
+                                <span class="text-[10px] font-mono tracking-widest">SYSTEM</span>
+                                <span class="text-[10px] font-mono tracking-widest">{$systemStatus}</span>
+                            </div>
+                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSecondarySlotClass()}`}>
+                                <span class="text-[10px] font-mono tracking-widest">SRC</span>
+                                <span class="text-[10px] font-mono tracking-widest">{formatBigNumber(totalSources)}</span>
+                            </div>
+                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSecondarySlotClass()}`}>
+                                <span class="text-[10px] font-mono tracking-widest">WS</span>
+                                <span class="text-[10px] font-mono tracking-widest">{$isConnected ? '✓' : '×'}</span>
+                            </div>
+                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSecondarySlotClass()}`}>
+                                <span class="text-[10px] font-mono tracking-widest">API</span>
+                                <span class="text-[10px] font-mono tracking-widest">{apiOk ? '✓' : '×'}{apiOk && apiLatencyMs != null ? ` ${apiLatencyMs}ms` : ''}</span>
+                            </div>
+                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSecondarySlotClass()}`}>
+                                <span class="text-[10px] font-mono tracking-widest">HEALTH</span>
+                                <span class="text-[10px] font-mono tracking-widest">{formatAgeSeconds(healthUpdatedAt, uiNow)}</span>
+                            </div>
+                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSecondarySlotClass()}`}>
+                                <span class="text-[10px] font-mono tracking-widest">PROFILE</span>
+                                <span class="text-[10px] font-mono tracking-widest">
+                                    {$mediaProfileStats.total
+                                        ? `${formatPercent($mediaProfileStats.rate)} ${$mediaProfileStats.hit}/${$mediaProfileStats.total}`
+                                        : '—'}
+                                </span>
+                            </div>
+                        </div>
+                    {/if}
+
+                    {#if !sidebarCollapsed}
+                        <div class="h-px sidebar-divider mx-1 my-2"></div>
+                    {/if}
+
+                    <button
+                        class="relative h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border {activeView === 'gde' ? 'sidebar-active' : 'bg-transparent'}"
+                        class:justify-center={sidebarCollapsed}
+                        on:click={() => togglePanel('gde')}
+                        title="Geographic Diversity Entropy"
+                    >
+                        {#if activeView === 'gde'}
+                            <span class="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full sidebar-indicator"></span>
+                        {/if}
+                        {#if sidebarCollapsed && activeView === 'gde'}
+                            <span class="absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full sidebar-indicator"></span>
+                        {/if}
+                        <span class="material-icons-round text-[18px] {activeView === 'gde' ? 'sidebar-text' : 'sidebar-text-muted'}">diversity_3</span>
+                        {#if !sidebarCollapsed}
+                            <span class="text-[11px] font-mono tracking-widest sidebar-text truncate">Geographic Diversity Entropy</span>
+                            <span class="ml-auto text-[10px] font-mono sidebar-text-quiet flex items-center gap-1">
+                                <span class="material-icons-round text-[16px] sidebar-icon-dim">{expandedPanel === 'gde' ? 'expand_less' : 'expand_more'}</span>
+                            </span>
+                        {/if}
+                    </button>
+
+                    {#if !sidebarCollapsed && expandedPanel === 'gde'}
+                        <div class="mx-1 mb-1 rounded sidebar-panel-soft border sidebar-border overflow-hidden">
+                            <div class="h-9 px-2 flex items-center gap-2 border-b sidebar-border">
+                                <span class="material-icons-round text-[18px] sidebar-icon-muted">diversity_3</span>
+                                <div class="text-xs font-semibold">Geographic Diversity Entropy</div>
+                            </div>
+                            <div class="p-3 text-[11px] sidebar-text-dim space-y-2">
+                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
+                                    <div class="flex items-center justify-between">
+                                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                            <span class="material-icons-round text-[16px] sidebar-icon-muted">schedule</span>
+                                            <span>Window</span>
+                                        </span>
+                                        <span class="font-mono sidebar-text-quiet">{gdeWindowHours}h</span>
+                                    </div>
+                                    <div class="flex flex-wrap gap-1">
+                                        {#each gdeWindowOptions as hours (hours)}
+                                            <button
+                                                type="button"
+                                                class={`px-2 py-0.5 rounded border sidebar-border text-[10px] font-mono tracking-widest ${gdeWindowHours === hours ? 'sidebar-active sidebar-text' : 'sidebar-panel-sub sidebar-text-muted'}`}
+                                                on:click={() => setGdeWindow(hours)}
+                                            >
+                                                {hours}h
+                                            </button>
+                                        {/each}
+                                    </div>
+                                </div>
+                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
+                                    <div class="flex items-center justify-between">
+                                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                            <span class="material-icons-round text-[16px] sidebar-icon-muted">tune</span>
+                                            <span>Alpha</span>
+                                        </span>
+                                        <span class="font-mono sidebar-text-quiet">{gdeAlpha.toFixed(2)}</span>
+                                    </div>
+                                    <div class="flex flex-wrap gap-1">
+                                        {#each gdeAlphaOptions as alpha (alpha)}
+                                            <button
+                                                type="button"
+                                                class={`px-2 py-0.5 rounded border sidebar-border text-[10px] font-mono tracking-widest ${gdeAlpha === alpha ? 'sidebar-active sidebar-text' : 'sidebar-panel-sub sidebar-text-muted'}`}
+                                                on:click={() => setGdeAlpha(alpha)}
+                                            >
+                                                α {alpha.toFixed(1)}
+                                            </button>
+                                        {/each}
+                                    </div>
+                                </div>
+                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">public</span>
+                                        <span>GDE</span>
+                                    </span>
+                                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.gde)}</span>
+                                </div>
+                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">tag</span>
+                                        <span>Entropy (H_norm)</span>
+                                    </span>
+                                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.normalized_shannon)}</span>
+                                </div>
+                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">scatter_plot</span>
+                                        <span>Dispersion (D_norm)</span>
+                                    </span>
+                                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.normalized_dispersion)}</span>
+                                </div>
+                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">grid_view</span>
+                                        <span>Coverage</span>
+                                    </span>
+                                    <span class="font-mono sidebar-text-quiet">{gdeMetrics ? `${gdeMetrics.country_count}/${gdeMetrics.total_visits}` : '—'}</span>
+                                </div>
+                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
+                                    <div class="flex items-center justify-between">
+                                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                            <span class="material-icons-round text-[16px] sidebar-icon-muted">trending_up</span>
+                                            <span>Net Growth</span>
+                                        </span>
+                                        <span class="font-mono sidebar-text-quiet">{growthLatest?.day || '—'}</span>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2 text-[10px] font-mono sidebar-text-quiet">
+                                        <div class="flex items-center justify-between rounded sidebar-panel-sub border sidebar-border px-2 py-1">
+                                            <span>Media</span>
+                                            <span>{growthLatest ? `${growthLatest.media_sources_net}` : '—'}</span>
+                                        </div>
+                                        <div class="flex items-center justify-between rounded sidebar-panel-sub border sidebar-border px-2 py-1">
+                                            <span>Candidate</span>
+                                            <span>{growthLatest ? formatPercent(growthLatest.candidate_sources_growth_rate) : '—'}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    {/if}
+
+                    {#if !sidebarCollapsed}
+                        <div class="h-px sidebar-divider mx-1 my-2"></div>
+                        <button
+                            type="button"
+                            class="mx-1 px-2 py-1 rounded sidebar-panel border sidebar-border text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-1.5"
+                            on:click={() => { toolsExpanded = !toolsExpanded; registerSidebarActivity(); }}
+                        >
+                            <span class="material-icons-round text-[14px] sidebar-icon-muted">handyman</span><span>Tools</span>
+                            <span class="ml-auto flex items-center gap-1.5">
+                                <span class="px-1.5 py-0.5 rounded sidebar-panel-sub border sidebar-border text-[9px] font-mono tracking-widest sidebar-text-quiet">System</span>
+                                {#if isSystemCritical}
+                                    <span class={`px-1.5 py-0.5 rounded border sidebar-panel-sub text-[10px] font-mono tracking-widest ${getSystemSlotClass()}`}>{$systemStatus}</span>
+                                {/if}
+                                <span class="material-icons-round text-[16px] sidebar-icon-dim">{toolsExpanded ? 'expand_less' : 'expand_more'}</span>
+                            </span>
+                        </button>
+                    {:else}
+                        <div class="h-px sidebar-divider my-1 mx-1"></div>
+                    {/if}
+
+                    <button
+                        class="relative h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border {activeView === 'health' ? 'sidebar-active' : 'bg-transparent'}"
+                        class:justify-center={sidebarCollapsed}
+                        on:click={() => togglePanel('health')}
+                        title="Health"
+                    >
+                        {#if activeView === 'health'}
+                            <span class="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full sidebar-indicator"></span>
+                        {/if}
+                        {#if sidebarCollapsed && activeView === 'health'}
+                            <span class="absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full sidebar-indicator"></span>
+                        {/if}
+                        <span class="material-icons-round text-[18px] {activeView === 'health' ? 'sidebar-text' : 'sidebar-text-muted'}">health_and_safety</span>
+                        {#if !sidebarCollapsed}
+                            <span class="text-[11px] font-mono tracking-widest sidebar-text">Health</span>
+                            <span class="ml-auto text-[10px] font-mono sidebar-text-quiet flex items-center gap-1">
+                                <span class="material-icons-round text-[16px] sidebar-icon-dim">{expandedPanel === 'health' ? 'expand_less' : 'expand_more'}</span>
+                            </span>
+                        {/if}
+                    </button>
+
+                    {#if !sidebarCollapsed && expandedPanel === 'health'}
+                        <div class="mx-1 mb-1 rounded sidebar-panel-soft border sidebar-border overflow-hidden">
+                            <div class="h-9 px-2 flex items-center gap-2 border-b sidebar-border">
+                                <span class="material-icons-round text-[18px] sidebar-icon-muted">health_and_safety</span>
+                                <div class="text-xs font-semibold">Health</div>
+                                <div class="ml-auto flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        class="px-2 py-0.5 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted"
+                                        on:click={() => { healthDetailExpanded = !healthDetailExpanded; }}
+                                    >
+                                        {healthDetailExpanded ? 'Detail' : 'Summary'}
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="p-3 space-y-2 text-[11px]">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div class="grid grid-cols-[1fr_auto] items-center sidebar-panel-sub border sidebar-border p-2 rounded">
+                                        <span class="sidebar-text-dim font-mono flex items-center gap-1">
+                                            <span class="material-icons-round text-[14px] sidebar-icon-dim">storage</span>
+                                            <span>POSTGRES</span>
+                                        </span>
+                                        <span class="font-mono {getStatusColor($serviceStatus.postgres)}">{$serviceStatus.postgres?.toUpperCase() || 'UNK'}</span>
+                                    </div>
+                                    <div class="grid grid-cols-[1fr_auto] items-center sidebar-panel-sub border sidebar-border p-2 rounded">
+                                        <span class="sidebar-text-dim font-mono flex items-center gap-1">
+                                            <span class="material-icons-round text-[14px] sidebar-icon-dim">memory</span>
+                                            <span>REDIS</span>
+                                        </span>
+                                        <span class="font-mono {getStatusColor($serviceStatus.redis)}">{$serviceStatus.redis?.toUpperCase() || 'UNK'}</span>
+                                    </div>
+                                </div>
+                                {#if healthDetailExpanded}
+                                    <div>
+                                        <div class="text-[10px] font-mono sidebar-text-dim tracking-widest mb-2 flex items-center gap-2">
+                                            <span class="material-icons-round text-[14px] sidebar-icon-dim">route</span>
+                                            <span>Threads</span>
+                                        </div>
+                                        <div class="grid grid-cols-3 gap-2">
+                                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
+                                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
+                                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">travel_explore</span>
+                                                    <span>Crawler</span>
+                                                </div>
+                                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</div>
+                                            </div>
+                                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
+                                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
+                                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">analytics</span>
+                                                    <span>Analyzer</span>
+                                                </div>
+                                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.analyzer)}">{$backendThreadStatus.analyzer?.toUpperCase() || 'UNK'}</div>
+                                            </div>
+                                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
+                                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
+                                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">delete_sweep</span>
+                                                    <span>Cleanup</span>
+                                                </div>
+                                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.cleanup)}">{$backendThreadStatus.cleanup?.toUpperCase() || 'UNK'}</div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 {/if}
                             </div>
+                        </div>
+                    {/if}
+
+                    <button
+                        class="relative h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border {activeView === 'autoheal' ? 'sidebar-active' : 'bg-transparent'}"
+                        class:justify-center={sidebarCollapsed}
+                        on:click={() => togglePanel('autoheal')}
+                        title="Autoheal"
+                    >
+                        {#if activeView === 'autoheal'}
+                            <span class="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full sidebar-indicator"></span>
+                        {/if}
+                        {#if sidebarCollapsed && activeView === 'autoheal'}
+                            <span class="absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full sidebar-indicator"></span>
+                        {/if}
+                        <span class="material-icons-round text-[18px] {activeView === 'autoheal' ? 'sidebar-text' : 'sidebar-text-muted'}">auto_fix_high</span>
+                        {#if !sidebarCollapsed}
+                            <span class="text-[11px] font-mono tracking-widest sidebar-text">Autoheal</span>
+                            <span class="ml-auto text-[10px] font-mono sidebar-text-quiet flex items-center gap-1">
+                                <span class="material-icons-round text-[16px] sidebar-icon-dim">{expandedPanel === 'autoheal' ? 'expand_less' : 'expand_more'}</span>
+                            </span>
+                        {/if}
+                    </button>
+
+                    {#if !sidebarCollapsed && expandedPanel === 'autoheal'}
+                        <div class="mx-1 mb-1 space-y-3">
+                            <div class="rounded sidebar-panel-soft border sidebar-border p-3">
+                                <div class="flex items-center justify-between">
+                                    <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-2">
+                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">shield</span>
+                                        <span>Safety</span>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            class="px-2 py-0.5 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted"
+                                            on:click={() => { autohealDetailExpanded = !autohealDetailExpanded; }}
+                                        >
+                                            {autohealDetailExpanded ? 'Detail' : 'Summary'}
+                                        </button>
+                                        {#if isDegraded}
+                                            <span class="px-2 py-0.5 rounded border border-yellow-500/40 bg-yellow-500/10 text-yellow-200 text-[10px] font-mono tracking-widest flex items-center gap-1">
+                                                <span class="material-icons-round text-[14px] text-yellow-200">warning_amber</span>
+                                                <span>DEGRADED</span>
+                                            </span>
+                                        {/if}
+                                        <button
+                                            class="px-2 py-1 rounded border text-[10px] font-mono tracking-widest disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 {safetyArmed ? 'border-red-500/40 bg-red-500/10 text-red-200' : 'sidebar-panel-sub sidebar-border sidebar-text'}"
+                                            on:click={toggleSafety}
+                                            disabled={isOffline}
+                                            aria-pressed={safetyArmed}
+                                            title={isOffline ? 'Offline: Controls locked' : safetyArmed ? 'Disarm high-risk controls' : 'Arm high-risk controls'}
+                                        >
+                                            <span class="material-icons-round text-[14px]">{safetyArmed ? 'lock_open' : 'lock'}</span>
+                                            {safetyArmed ? 'ARMED' : 'SAFE'}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="mt-2 text-[11px] sidebar-text-dim font-mono">
+                                    {#if isOffline}
+                                        OFFLINE LOCK
+                                    {:else if safetyArmed}
+                                        High-risk actions enabled.
+                                    {:else}
+                                        High-risk actions blocked.
+                                    {/if}
+                                </div>
+                            </div>
+
+                            {#if autohealDetailExpanded}
+                                <div class="rounded sidebar-panel-soft border sidebar-border p-3">
+                                    <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted mb-2 flex items-center gap-2">
+                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">travel_explore</span>
+                                        <span>Crawler</span>
+                                    </div>
+                                    <div class="grid grid-cols-3 gap-2 mb-2">
+                                        <button
+                                            class="px-2 py-2 rounded border border-emerald-500/30 hover:bg-emerald-500/10 text-emerald-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                                            on:click={() => runHighRisk('crawler START', () => controlCrawler('start'))}
+                                            disabled={isCrawlerLoading || isOffline || !safetyArmed || $backendThreadStatus.crawler === 'running'}
+                                        >
+                                            <span class="material-icons-round text-[16px]">play_arrow</span>
+                                            <span>Start</span>
+                                        </button>
+                                        <button
+                                            class="px-2 py-2 rounded border border-red-500/30 hover:bg-red-500/10 text-red-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                                            on:click={() => runHighRisk('crawler STOP', () => controlCrawler('stop'))}
+                                            disabled={isCrawlerLoading || isOffline || !safetyArmed || $backendThreadStatus.crawler !== 'running'}
+                                        >
+                                            <span class="material-icons-round text-[16px]">stop</span>
+                                            <span>Stop</span>
+                                        </button>
+                                        <button
+                                            class="px-2 py-2 rounded border border-amber-500/30 hover:bg-amber-500/10 text-amber-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                                            on:click={() => runHighRisk('crawler RESTART', () => controlCrawler('restart'))}
+                                            disabled={isCrawlerLoading || isOffline || !safetyArmed}
+                                        >
+                                            <span class="material-icons-round text-[16px]">restart_alt</span>
+                                            <span>Restart</span>
+                                        </button>
+                                    </div>
+                                    <div class="text-[10px] font-mono sidebar-text-dim sidebar-panel-sub border sidebar-border p-2 rounded min-h-[32px]">
+                                        {#if isCrawlerLoading}
+                                            Processing…
+                                        {:else}
+                                            {crawlerMessage || 'Ready.'}
+                                        {/if}
+                                    </div>
+                                </div>
+
+                                <div class="rounded sidebar-panel-soft border sidebar-border p-3">
+                                    <div class="flex items-center justify-between">
+                                        <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-2">
+                                            <span class="material-icons-round text-[16px] sidebar-icon-muted">auto_fix_high</span>
+                                            <span>Autoheal</span>
+                                        </div>
+                                        <button
+                                            class="px-2 py-1 rounded border border-amber-500/30 hover:bg-amber-500/10 text-amber-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                                            on:click={() => runHighRisk('autoheal FORCE', triggerHeal)}
+                                            disabled={isCrawlerLoading || isOffline || !safetyArmed}
+                                        >
+                                            <span class="material-icons-round text-[14px]">bolt</span>
+                                            Force
+                                        </button>
+                                    </div>
+                                    <div class="mt-2 text-[11px] sidebar-text-dim">
+                                        Crawler: <span class="{getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</span>
+                                    </div>
+                                </div>
+                            {:else}
+                                <div class="rounded sidebar-panel-sub border sidebar-border p-2 flex items-center justify-between text-[10px] font-mono">
+                                    <span class="sidebar-text-muted flex items-center gap-2">
+                                        <span class="material-icons-round text-[14px] sidebar-icon-muted">travel_explore</span>
+                                        <span>Crawler</span>
+                                    </span>
+                                    <span class="{getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</span>
+                                </div>
+                            {/if}
+                        </div>
+                    {/if}
+
+                    {#if toolsExpanded}
+                        <div class="h-px sidebar-divider mx-1 my-2"></div>
+                        <button
+                            class="h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border sidebar-text-muted {disabledClass}"
+                            class:justify-center={sidebarCollapsed}
+                            on:click={() => emitMapCommandWithActivity('export_png_1200')}
+                            title="Export PNG (1200 DPI)"
+                        >
+                            <span class="material-icons-round text-[18px]">image</span>
+                            {#if !sidebarCollapsed}
+                                <span class="text-[11px] font-mono tracking-widest">Export PNG</span>
+                                <span class="ml-auto text-[10px] font-mono sidebar-text-quiet">1200 DPI</span>
+                            {/if}
                         </button>
 
-                        <div class="w-[1px] h-6 bg-white/10"></div>
-
-                        <div class="flex items-center gap-1 {disabledClass}">
-                            <button 
-                                class="w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300 relative group/btn 
-                                {$windowState.brain?.visible && !$windowState.brain?.minimized ? 'bg-white/10 text-neon-blue shadow-[0_0_15px_rgba(0,243,255,0.2)] border border-neon-blue/30' : 'text-gray-400 hover:text-white hover:bg-white/10 border border-transparent hover:border-white/10'}"
-                                on:click={() => toggleWindow('brain')}
-                                title="BRAIN"
-                            >
-                                <span class="material-icons-round text-lg relative z-10">🧠</span>
-                            </button>
-                        </div>
-
-                        <div class="w-[1px] h-6 bg-white/15"></div>
-
-                        <div class="flex items-center gap-1 {disabledClass}">
-                            <button 
-                                class="w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300 relative group/btn
-                                {$soundEnabled ? 'text-neon-blue' : 'text-gray-500'}"
-                                on:click={toggleSound}
-                                title={$soundEnabled ? 'Sound: ON' : 'Sound: OFF'}
-                                aria-pressed={$soundEnabled}
-                            >
-                                <span class="material-icons-round text-lg relative z-10">{$soundEnabled ? 'volume_up' : 'volume_off'}</span>
-                                {#if !$soundEnabled}
-                                    <span class="absolute inset-0 flex items-center justify-center pointer-events-none">
-                                        <span class="material-icons-round text-[10px] opacity-60">do_not_disturb_on</span>
-                                    </span>
-                                {/if}
-                            </button>
-                        </div>
-
-                        <div class="w-[1px] h-6 bg-white/15"></div>
-                        <button 
-                            class="w-6 h-6 rounded-full flex items-center justify-center text-gray-400 hover:text-white transition-all"
-                            on:click={() => isExpanded = false}
-                            title="Collapse Control Bar"
+                        <button
+                            class="h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border sidebar-text-muted {disabledClass}"
+                            class:justify-center={sidebarCollapsed}
+                            on:click={() => emitMapCommandWithActivity('export_svg_1200')}
+                            title="Export SVG"
                         >
-                            <span class="material-icons-round text-sm">chevron_right</span>
+                            <span class="material-icons-round text-[18px]">schema</span>
+                            {#if !sidebarCollapsed}
+                                <span class="text-[11px] font-mono tracking-widest">Export SVG</span>
+                                <span class="ml-auto text-[10px] font-mono sidebar-text-quiet">Vector</span>
+                            {/if}
+                        </button>
+
+                        <button
+                            class="h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border sidebar-text-muted {disabledClass}"
+                            class:justify-center={sidebarCollapsed}
+                            on:click={() => emitMapCommandWithActivity('reset_view')}
+                            title="Reset View"
+                        >
+                            <span class="material-icons-round text-[18px]">my_location</span>
+                            {#if !sidebarCollapsed}
+                                <span class="text-[11px] font-mono tracking-widest">Reset View</span>
+                            {/if}
+                        </button>
+
+                        <button
+                            class="h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border sidebar-text-muted"
+                            class:justify-center={sidebarCollapsed}
+                            on:click={toggleSoundWithActivity}
+                            title={$soundEnabled ? 'Sound: On' : 'Sound: Off'}
+                            aria-pressed={$soundEnabled}
+                        >
+                            <span class="material-icons-round text-[18px]">{$soundEnabled ? 'volume_up' : 'volume_off'}</span>
+                            {#if !sidebarCollapsed}
+                                <span class="text-[11px] font-mono tracking-widest">Sound</span>
+                                <span class="ml-auto text-[10px] font-mono sidebar-text-quiet">{$soundEnabled ? 'On' : 'Off'}</span>
+                            {/if}
                         </button>
                     {/if}
-                </div>
+                </nav>
             </div>
-        </div>
+        </aside>
     </div>
 </main>
 

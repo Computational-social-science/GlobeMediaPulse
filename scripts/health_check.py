@@ -161,16 +161,20 @@ def check_redis():
     # print("\n--- Checking Redis ---")
     try:
         import redis
-        host = os.getenv("REDIS_HOST", "localhost")
-        port = int(os.getenv("REDIS_PORT", 6379))
-        r = redis.Redis(host=host, port=port, socket_timeout=1)
+        redis_url = os.getenv("REDIS_URL", "").strip()
+        if redis_url:
+            r = redis.Redis.from_url(redis_url, socket_timeout=1)
+        else:
+            host = os.getenv("REDIS_HOST", "localhost")
+            port = int(os.getenv("REDIS_PORT", 6380))
+            r = redis.Redis(host=host, port=port, socket_timeout=1)
         if r.ping():
             log("PASS", "Successfully connected to Redis.")
     except ImportError:
         log("FAIL", "redis module not found.")
     except Exception as e:
         log("FAIL", f"Failed to connect to Redis: {e}")
-        print(f"{YELLOW}Suggestion: Ensure Redis is running (docker run -p 6379:6379 redis).{RESET}")
+        print(f"{YELLOW}Suggestion: Ensure Redis is running and REDIS_URL points to the correct port (default 6380).{RESET}")
 
 def main():
     print(f"Globe Media Pulse Environment Health Check - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

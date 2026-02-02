@@ -32,6 +32,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+
+    - name: Guardrail (zero-cost): forbid Fly.io references
+      run: |
+        if grep -RIn --exclude-dir=node_modules --exclude-dir=dist -E "fly\.io|fly\.dev|flyctl|fly\.toml" .; then
+          echo "Zero-cost policy violation: Fly.io references found."
+          exit 1
+        fi
     
     - name: Set up Python 3.10
       uses: actions/setup-python@v4

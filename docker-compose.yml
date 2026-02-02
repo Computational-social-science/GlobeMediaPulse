@@ -120,7 +120,7 @@ services:
       - /app/node_modules # Prevent host node_modules from overwriting container's
     depends_on:
       - backend
-    command: npm run dev -- --host
+    command: sh -c "if [ ! -d node_modules/flag-icons ]; then npm install; fi; npm run dev -- --host"
 
 volumes:
   globemediapulse_postgres_data:
