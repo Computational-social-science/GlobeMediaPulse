@@ -11,7 +11,7 @@ echo Syncing frontend resources...
 python scripts/build_frontend_data.py
 echo.
 echo Starting Frontend...
-set VITE_STATIC_MODE=1
+if "%VITE_STATIC_MODE%"=="" set VITE_STATIC_MODE=1
 cd frontend
-call npm run dev -- --port 5173 --strictPort
+call npm run dev
 pause

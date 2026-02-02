@@ -43,9 +43,57 @@ jobs:
       - name: Build Frontend Data
         run: python scripts/build_frontend_data.py
 
+      - name: Validate Static Data
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          data_path = Path("frontend/src/lib/data.js")
+          if not data_path.exists():
+              raise SystemExit("frontend/src/lib/data.js not found")
+
+          content = data_path.read_text(encoding="utf-8")
+          required_keys = ("COUNTRIES", "MEDIA_SOURCES", "ENGLISH_SPEAKING_COUNTRIES")
+          missing = [key for key in required_keys if f'"{key}"' not in content]
+          if missing:
+              raise SystemExit(f"Missing static data keys: {', '.join(missing)}")
+
+          print("Static data validation passed.")
+          PY
+
       - name: Build
         working-directory: ./frontend
+        env:
+          VITE_STATIC_MODE: "1"
         run: npm run build
+
+      - name: Install Playwright Browsers
+        working-directory: ./frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Smoke Test (Playwright)
+        working-directory: ./frontend
+        env:
+          PLAYWRIGHT_BASE_URL: "http://127.0.0.1:4173"
+        run: |
+          npm run preview -- --host 127.0.0.1 --port 4173 &
+          python - <<'PY'
+          import time
+          import urllib.request
+
+          url = "http://127.0.0.1:4173/"
+          for _ in range(30):
+              try:
+                  with urllib.request.urlopen(url, timeout=2) as resp:
+                      if resp.status == 200:
+                          print("Preview server is ready.")
+                          break
+              except Exception:
+                  time.sleep(1)
+          else:
+              raise SystemExit("Preview server did not become ready.")
+          PY
+          npx playwright test --reporter=line
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4

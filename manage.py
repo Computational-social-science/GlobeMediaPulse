@@ -128,6 +128,29 @@ def health_check():
 
     click.echo("System is HEALTHY.")
 
+@cli.command(name="local-verify")
+@click.option("--backend-url", default=lambda: os.getenv("BACKEND_URL", "http://localhost:8002"), show_default=True)
+@click.option("--frontend-url", default=lambda: os.getenv("FRONTEND_URL", "http://localhost:5173"), show_default=True)
+@click.option("--env-check/--no-env-check", default=True, show_default=True)
+@click.option("--db-check/--no-db-check", default=True, show_default=True)
+@click.option("--verify-crawler/--no-verify-crawler", default=False, show_default=True)
+def local_verify(backend_url: str, frontend_url: str, env_check: bool, db_check: bool, verify_crawler: bool):
+    repo_root = os.getcwd()
+    env = dict(os.environ)
+    env["BACKEND_URL"] = (backend_url or "").rstrip("/") or "http://localhost:8002"
+    env["FRONTEND_URL"] = (frontend_url or "").rstrip("/") or "http://localhost:5173"
+    env["VERIFY_REQUIRE_CRAWLER"] = "1" if verify_crawler else "0"
+
+    click.echo("Running Local Verification...")
+    if env_check:
+        _run([sys.executable, os.path.join("scripts", "health_check.py")], cwd=repo_root, env=env, check=False)
+
+    if db_check:
+        _run([sys.executable, "manage.py", "health-check"], cwd=repo_root, env=env)
+
+    _run([sys.executable, "verify_full_stack.py"], cwd=repo_root, env=env)
+    click.echo("✅ Local Verification Passed.")
+
 @cli.command(name="analytics")
 def analytics():
     """Show system analytics and statistics"""
@@ -578,6 +601,7 @@ def sync_all(
         _run([sys.executable, "-m", "pytest", "backend\\tests", "-q"], cwd=repo_root, dry_run=dry_run)
         _run(["npm", "run", "lint", "--prefix", "frontend"], cwd=repo_root, dry_run=dry_run)
         _run(["npm", "run", "typecheck", "--prefix", "frontend"], cwd=repo_root, dry_run=dry_run)
+        _run([sys.executable, "scripts\\build_frontend_data.py"], cwd=repo_root, dry_run=dry_run)
         _run(["npm", "run", "build", "--prefix", "frontend"], cwd=repo_root, dry_run=dry_run)
 
     if do_docker:

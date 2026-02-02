@@ -651,8 +651,10 @@
     function isStaticMode(): boolean {
         const env = getViteEnv();
         const forced = String(env.VITE_STATIC_MODE || '').trim().toLowerCase();
-        if (forced === '1' || forced === 'true' || forced === 'yes') return true;
-        return window.location.hostname !== 'localhost' && !env.VITE_API_URL && !env.VITE_API_BASE_URL;
+        if (forced === '1' || forced === 'true' || forced === 'yes' || forced === 'on') return true;
+        if (forced === '0' || forced === 'false' || forced === 'no' || forced === 'off') return false;
+        if (env.VITE_API_URL || env.VITE_API_BASE_URL) return false;
+        return window.location.hostname !== 'localhost';
     }
 
     function resolveApiBase(): string {
