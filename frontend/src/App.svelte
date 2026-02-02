@@ -887,7 +887,7 @@
     }
 </script>
 
-<main class="w-full h-screen bg-slate-950 text-slate-100 font-serif selection:bg-slate-600/40">
+<main class="w-full h-screen bg-slate-950 text-slate-100 selection:bg-slate-600/40">
     {#if isLoading}
         <div class="fixed inset-0 z-[10000] bg-slate-950 flex items-center justify-center">
             <div class="text-xs font-mono tracking-widest text-slate-300">Initializing…</div>

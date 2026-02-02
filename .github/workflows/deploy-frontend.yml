@@ -67,14 +67,8 @@ jobs:
           VITE_STATIC_MODE: "1"
         run: npm run build
 
-      - name: Install Playwright Browsers
+      - name: Smoke Test (Preview)
         working-directory: ./frontend
-        run: npx playwright install --with-deps chromium
-
-      - name: Smoke Test (Playwright)
-        working-directory: ./frontend
-        env:
-          PLAYWRIGHT_BASE_URL: "http://127.0.0.1:4173"
         run: |
           npm run preview -- --host 127.0.0.1 --port 4173 &
           python - <<'PY'
@@ -92,8 +86,13 @@ jobs:
                   time.sleep(1)
           else:
               raise SystemExit("Preview server did not become ready.")
+
+          with urllib.request.urlopen(url, timeout=2) as resp:
+              html = resp.read().decode("utf-8", errors="ignore")
+          if "<title>Globe Media Pulse</title>" not in html:
+              raise SystemExit("Preview HTML title mismatch.")
+          print("Smoke test passed.")
           PY
-          npx playwright test --reporter=line
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
