@@ -2,8 +2,8 @@
     import { onMount, onDestroy, getContext } from 'svelte';
     import { get } from 'svelte/store';
     import { SvelteMap } from 'svelte/reactivity';
-    import { mapMode, newsEvents, systemLogs, mapCommand, mapState, mapIdleTimeout, mediaProfileStats } from '../stores.js';
-    import { DATA } from '../data.js';
+    import { mapMode, newsEvents, systemLogs, mapCommand, mapState, mapIdleTimeout, mediaProfileStats } from '@stores';
+    import { DATA } from '@lib/data.js';
     import maplibregl from 'maplibre-gl';
 
     type SoundManager = {

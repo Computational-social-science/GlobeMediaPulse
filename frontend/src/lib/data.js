@@ -100,6 +100,14 @@ export const DATA = {
             "region": "Americas"
         },
         {
+            "code": "ASC",
+            "code_alpha2": "AC",
+            "name": "Ascension Island",
+            "lat": -7.9467,
+            "lng": -14.3559,
+            "region": "Africa"
+        },
+        {
             "code": "AUS",
             "code_alpha2": "AU",
             "name": "Australia",
@@ -316,6 +324,14 @@ export const DATA = {
             "region": "Americas"
         },
         {
+            "code": "IC",
+            "code_alpha2": "IC",
+            "name": "Canary Islands",
+            "lat": 28.2916,
+            "lng": -16.6291,
+            "region": "Africa"
+        },
+        {
             "code": "CPV",
             "code_alpha2": "CV",
             "name": "Cape Verde",
@@ -345,6 +361,14 @@ export const DATA = {
             "name": "Central African Republic",
             "lat": 7.0,
             "lng": 21.0,
+            "region": "Africa"
+        },
+        {
+            "code": "EA",
+            "code_alpha2": "EA",
+            "name": "Ceuta & Melilla",
+            "lat": 35.8894,
+            "lng": -5.3213,
             "region": "Africa"
         },
         {
@@ -378,6 +402,14 @@ export const DATA = {
             "lat": -10.5,
             "lng": 105.66667,
             "region": "Oceania"
+        },
+        {
+            "code": "CPT",
+            "code_alpha2": "CP",
+            "name": "Clipperton Island",
+            "lat": 10.2833,
+            "lng": -109.2167,
+            "region": "Americas"
         },
         {
             "code": "CCK",
@@ -484,6 +516,14 @@ export const DATA = {
             "region": "Europe"
         },
         {
+            "code": "DGA",
+            "code_alpha2": "DG",
+            "name": "Diego Garcia",
+            "lat": -7.3195,
+            "lng": 72.4228,
+            "region": "Asia"
+        },
+        {
             "code": "DJI",
             "code_alpha2": "DJ",
             "name": "Djibouti",
@@ -570,6 +610,14 @@ export const DATA = {
             "lat": 8.0,
             "lng": 38.0,
             "region": "Africa"
+        },
+        {
+            "code": "EU",
+            "code_alpha2": "EU",
+            "name": "European Union",
+            "lat": 50.8503,
+            "lng": 4.3517,
+            "region": "Europe"
         },
         {
             "code": "FLK",
@@ -1812,6 +1860,14 @@ export const DATA = {
             "region": "Americas"
         },
         {
+            "code": "TAA",
+            "code_alpha2": "TA",
+            "name": "Tristan da Cunha",
+            "lat": -37.1052,
+            "lng": -12.2777,
+            "region": "Africa"
+        },
+        {
             "code": "TUN",
             "code_alpha2": "TN",
             "name": "Tunisia",
@@ -1882,6 +1938,14 @@ export const DATA = {
             "lat": 54.0,
             "lng": -2.0,
             "region": "Europe"
+        },
+        {
+            "code": "UN",
+            "code_alpha2": "UN",
+            "name": "United Nations",
+            "lat": 40.7489,
+            "lng": -73.968,
+            "region": "Americas"
         },
         {
             "code": "USA",

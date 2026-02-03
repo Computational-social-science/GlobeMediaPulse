@@ -13,9 +13,14 @@
         audioVolume,
         mapCommand,
         mediaProfileStats,
-    } from './lib/stores.js';
-    import MapContainer from './lib/components/MapContainer.svelte';
-    import { DATA } from './lib/data.js';
+    } from '@stores';
+    import MapContainer from '@components/MapContainer.svelte';
+    import Sidebar from '@components/Sidebar.svelte';
+    import { DATA } from '@lib/data.js';
+    import {
+        getStatusColor,
+        getThreadStatusColor
+    } from '@/utils/statusHelpers.js';
 
     class SoundManager {
         ctx: AudioContext | null = null;
@@ -318,7 +323,6 @@
     let expandedPanel: 'health' | 'autoheal' | 'gde' | null = 'gde';
     let sidebarCollapsed = true;
     let lastExpandedPanel: 'health' | 'autoheal' | 'gde' | null = 'gde';
-    let toolsExpanded = false;
     let healthDetailExpanded = false;
     let autohealDetailExpanded = false;
     let safetyArmed = false;
@@ -341,10 +345,6 @@
         safetyAutoDisarmTimer = null;
     }
 
-    $: statusSummary =
-        `${$systemStatus} | ${formatBigNumber(totalSources)} SRC | WS ${$isConnected ? '✓' : '×'} | API ${apiOk ? '✓' : '×'}${
-            apiOk && apiLatencyMs != null ? ` ${apiLatencyMs}ms` : ''
-        } | HEALTH ${formatAgeSeconds(healthUpdatedAt, uiNow)}`;
     $: growthLatest = growthMetrics.length ? growthMetrics[0] : null;
 
     function scheduleSidebarAutoCollapse() {
@@ -433,22 +433,6 @@
         activeView = isOffline ? 'health' : isDegraded ? 'autoheal' : 'health';
         expandedPanel = activeView;
         registerSidebarActivity();
-    }
-
-    function getSystemSlotClass() {
-        if ($systemStatus === 'OFFLINE') return 'border-red-400/70 text-red-200';
-        if ($systemStatus === 'DEGRADED') return 'border-yellow-400/70 text-yellow-200';
-        return 'sidebar-border sidebar-text';
-    }
-
-    function getSecondarySlotClass() {
-        return isSystemCritical ? 'sidebar-border-soft sidebar-text-quiet' : 'sidebar-border sidebar-text';
-    }
-
-    function getSystemTitleClass() {
-        if ($systemStatus === 'OFFLINE') return 'text-red-200';
-        if ($systemStatus === 'DEGRADED') return 'text-yellow-200';
-        return 'sidebar-text-muted';
     }
 
     /**
@@ -627,13 +611,6 @@
         if (min < 60) return `${min}m`;
         const hr = Math.floor(min / 60);
         return `${hr}h`;
-    }
-
-    function getSystemDotClass(status?: string) {
-        if (status === 'ONLINE') return 'status-dot-ok';
-        if (status === 'DEGRADED') return 'status-dot-warn';
-        if (status === 'OFFLINE') return 'status-dot-error';
-        return 'status-dot-neutral';
     }
 
     function scheduleSafetyAutoDisarm() {
@@ -862,29 +839,6 @@
     onDestroy(() => {
         clearTimeout(healthCheckTimer);
     });
-
-    function getStatusColor(status?: string) {
-        const value = String(status || '').toLowerCase();
-        if (!value || value === 'unknown') return 'status-text-neutral';
-        if (value === 'ok' || value === 'running' || value === 'active') return 'status-text-ok';
-        if (value === 'disabled' || value === 'idle') return 'status-text-neutral';
-        if (value === 'restarting' || value === 'starting' || value === 'warning' || value === 'degraded' || value === 'waiting')
-            return 'status-text-warn';
-        if (value === 'stalled' || value === 'stopped' || value === 'error' || value === 'failed' || value === 'offline')
-            return 'status-text-error';
-        return 'status-text-error';
-    }
-
-    function getThreadStatusColor(status?: string) {
-        return getStatusColor(status);
-    }
-
-    function getSystemIconClass(status?: string) {
-        if (status === 'ONLINE') return 'sidebar-text-muted';
-        if (status === 'DEGRADED') return 'text-yellow-400';
-        if (status === 'OFFLINE') return 'text-red-500';
-        return 'sidebar-text-dim';
-    }
 </script>
 
 <main class="w-full h-screen bg-slate-950 text-slate-100 selection:bg-slate-600/40">
@@ -899,536 +853,292 @@
             <MapContainer />
         </section>
 
-        <aside
-            class="absolute inset-y-0 left-0 z-[200] min-h-0 sidebar-shell sidebar-theme shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] overflow-hidden"
-            style="width: {sidebarCollapsed ? '56px' : '320px'};"
-            on:mouseenter={() => setSidebarHovering(true)}
-            on:mouseleave={() => setSidebarHovering(false)}
+        <Sidebar
+            bind:sidebarCollapsed
+            bind:expandedPanel
+            bind:activeView
+            bind:statusPanelExpanded
+            {totalSources}
+            {healthUpdatedAt}
+            {uiNow}
+            {apiOk}
+            {apiLatencyMs}
+            {isSystemCritical}
+            {isOffline}
+            onExpand={expandSidebar}
+            onCollapse={() => collapseSidebar(false)}
+            onTogglePanel={togglePanel}
+            onToggleStatusPanel={toggleStatusPanel}
+            onOpenDiagnostic={openDiagnosticPanel}
+            onHover={setSidebarHovering}
+            onScroll={handleSidebarScroll}
+            onActivity={registerSidebarActivity}
         >
-            <div class="h-full min-h-0 flex flex-col">
-                <div class="h-12 px-2 flex items-center sidebar-top">
-                    <div class="flex items-center gap-2 min-w-0 flex-1">
-                        {#if sidebarCollapsed}
+            <div slot="gde-content" class="space-y-2">
+                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                            <span class="material-icons-round text-[16px] sidebar-icon-muted">schedule</span>
+                            <span>Window</span>
+                        </span>
+                        <span class="font-mono sidebar-text-quiet">{gdeWindowHours}h</span>
+                    </div>
+                    <div class="flex flex-wrap gap-1">
+                        {#each gdeWindowOptions as hours (hours)}
                             <button
-                                class="w-9 h-9 rounded flex items-center justify-center sidebar-hoverable sidebar-icon-muted"
-                                on:click={expandSidebar}
-                                title="Expand Sidebar"
+                                type="button"
+                                class={`px-2 py-0.5 rounded border sidebar-border text-[10px] font-mono tracking-widest ${gdeWindowHours === hours ? 'sidebar-active sidebar-text' : 'sidebar-panel-sub sidebar-text-muted'}`}
+                                on:click={() => setGdeWindow(hours)}
                             >
-                                <span class="material-icons-round text-[18px]">chevron_right</span>
+                                {hours}h
                             </button>
-                        {:else}
+                        {/each}
+                    </div>
+                </div>
+                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                            <span class="material-icons-round text-[16px] sidebar-icon-muted">tune</span>
+                            <span>Alpha</span>
+                        </span>
+                        <span class="font-mono sidebar-text-quiet">{gdeAlpha.toFixed(2)}</span>
+                    </div>
+                    <div class="flex flex-wrap gap-1">
+                        {#each gdeAlphaOptions as alpha (alpha)}
                             <button
-                                class="w-9 h-9 rounded flex items-center justify-center sidebar-hoverable sidebar-icon-muted"
-                                on:click={() => collapseSidebar(false)}
-                                title="Collapse Sidebar"
+                                type="button"
+                                class={`px-2 py-0.5 rounded border sidebar-border text-[10px] font-mono tracking-widest ${gdeAlpha === alpha ? 'sidebar-active sidebar-text' : 'sidebar-panel-sub sidebar-text-muted'}`}
+                                on:click={() => setGdeAlpha(alpha)}
                             >
-                                <span class="material-icons-round text-[18px]">chevron_left</span>
+                                α {alpha.toFixed(1)}
                             </button>
-                        {/if}
-                        {#if !sidebarCollapsed}
-                            <div class="min-w-0">
-                                <div class="flex items-center gap-2 min-w-0">
-                                    <span class="w-6 h-6 rounded sidebar-panel-sub border sidebar-border flex items-center justify-center sidebar-text shrink-0">
-                                        <span class="material-icons-round text-[16px]">public</span>
-                                    </span>
-                                    <div class="text-xs font-semibold tracking-wide truncate sidebar-text">Globe Media Pulse</div>
+                        {/each}
+                    </div>
+                </div>
+                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                        <span class="material-icons-round text-[16px] sidebar-icon-muted">public</span>
+                        <span>GDE</span>
+                    </span>
+                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.gde)}</span>
+                </div>
+                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                        <span class="material-icons-round text-[16px] sidebar-icon-muted">tag</span>
+                        <span>Entropy (H_norm)</span>
+                    </span>
+                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.normalized_shannon)}</span>
+                </div>
+                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                        <span class="material-icons-round text-[16px] sidebar-icon-muted">scatter_plot</span>
+                        <span>Dispersion (D_norm)</span>
+                    </span>
+                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.normalized_dispersion)}</span>
+                </div>
+                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                        <span class="material-icons-round text-[16px] sidebar-icon-muted">grid_view</span>
+                        <span>Coverage</span>
+                    </span>
+                    <span class="font-mono sidebar-text-quiet">{gdeMetrics ? `${gdeMetrics.country_count}/${gdeMetrics.total_visits}` : '—'}</span>
+                </div>
+                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                            <span class="material-icons-round text-[16px] sidebar-icon-muted">trending_up</span>
+                            <span>Net Growth</span>
+                        </span>
+                        <span class="font-mono sidebar-text-quiet">{growthLatest?.day || '—'}</span>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 text-[10px] font-mono sidebar-text-quiet">
+                        <div class="flex items-center justify-between rounded sidebar-panel-sub border sidebar-border px-2 py-1">
+                            <span>Media</span>
+                            <span>{growthLatest ? `${growthLatest.media_sources_net}` : '—'}</span>
+                        </div>
+                        <div class="flex items-center justify-between rounded sidebar-panel-sub border sidebar-border px-2 py-1">
+                            <span>Candidate</span>
+                            <span>{growthLatest ? formatPercent(growthLatest.candidate_sources_growth_rate) : '—'}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div slot="health-header-actions">
+                <button
+                    type="button"
+                    class="px-2 py-0.5 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted"
+                    on:click={() => { healthDetailExpanded = !healthDetailExpanded; }}
+                >
+                    {healthDetailExpanded ? 'Detail' : 'Summary'}
+                </button>
+            </div>
+
+            <div slot="health-content" class="space-y-2">
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="grid grid-cols-[1fr_auto] items-center sidebar-panel-sub border sidebar-border p-2 rounded">
+                        <span class="sidebar-text-dim font-mono flex items-center gap-1">
+                            <span class="material-icons-round text-[14px] sidebar-icon-dim">storage</span>
+                            <span>POSTGRES</span>
+                        </span>
+                        <span class="font-mono {getStatusColor($serviceStatus.postgres)}">{$serviceStatus.postgres?.toUpperCase() || 'UNK'}</span>
+                    </div>
+                    <div class="grid grid-cols-[1fr_auto] items-center sidebar-panel-sub border sidebar-border p-2 rounded">
+                        <span class="sidebar-text-dim font-mono flex items-center gap-1">
+                            <span class="material-icons-round text-[14px] sidebar-icon-dim">memory</span>
+                            <span>REDIS</span>
+                        </span>
+                        <span class="font-mono {getStatusColor($serviceStatus.redis)}">{$serviceStatus.redis?.toUpperCase() || 'UNK'}</span>
+                    </div>
+                </div>
+                {#if healthDetailExpanded}
+                    <div>
+                        <div class="text-[10px] font-mono sidebar-text-dim tracking-widest mb-2 flex items-center gap-2">
+                            <span class="material-icons-round text-[14px] sidebar-icon-dim">route</span>
+                            <span>Threads</span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2">
+                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
+                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
+                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">travel_explore</span>
+                                    <span>Crawler</span>
                                 </div>
+                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</div>
                             </div>
+                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
+                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
+                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">analytics</span>
+                                    <span>Analyzer</span>
+                                </div>
+                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.analyzer)}">{$backendThreadStatus.analyzer?.toUpperCase() || 'UNK'}</div>
+                            </div>
+                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
+                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
+                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">delete_sweep</span>
+                                    <span>Cleanup</span>
+                                </div>
+                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.cleanup)}">{$backendThreadStatus.cleanup?.toUpperCase() || 'UNK'}</div>
+                            </div>
+                        </div>
+                    </div>
+                {/if}
+            </div>
+
+            <div slot="autoheal-content" class="space-y-3">
+                <div class="rounded sidebar-panel-soft border sidebar-border p-3">
+                    <div class="flex items-center justify-between">
+                        <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-2">
+                            <span class="material-icons-round text-[16px] sidebar-icon-muted">shield</span>
+                            <span>Safety</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button
+                                type="button"
+                                class="px-2 py-0.5 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted"
+                                on:click={() => { autohealDetailExpanded = !autohealDetailExpanded; }}
+                            >
+                                {autohealDetailExpanded ? 'Detail' : 'Summary'}
+                            </button>
+                            {#if isDegraded}
+                                <span class="px-2 py-0.5 rounded border border-yellow-500/40 bg-yellow-500/10 text-yellow-200 text-[10px] font-mono tracking-widest flex items-center gap-1">
+                                    <span class="material-icons-round text-[14px] text-yellow-200">warning_amber</span>
+                                    <span>DEGRADED</span>
+                                </span>
+                            {/if}
+                            <button
+                                class="px-2 py-1 rounded border text-[10px] font-mono tracking-widest disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 {safetyArmed ? 'border-red-500/40 bg-red-500/10 text-red-200' : 'sidebar-panel-sub sidebar-border sidebar-text'}"
+                                on:click={toggleSafety}
+                                disabled={isOffline}
+                                aria-pressed={safetyArmed}
+                                title={isOffline ? 'Offline: Controls locked' : safetyArmed ? 'Disarm high-risk controls' : 'Arm high-risk controls'}
+                            >
+                                <span class="material-icons-round text-[14px]">{safetyArmed ? 'lock_open' : 'lock'}</span>
+                                {safetyArmed ? 'ARMED' : 'SAFE'}
+                            </button>
+                        </div>
+                    </div>
+                    <div class="mt-2 text-[11px] sidebar-text-dim font-mono">
+                        {#if isOffline}
+                            OFFLINE LOCK
+                        {:else if safetyArmed}
+                            High-risk actions enabled.
+                        {:else}
+                            High-risk actions blocked.
                         {/if}
                     </div>
                 </div>
 
-                <nav class="flex-1 min-h-0 overflow-y-auto px-1 py-2 flex flex-col gap-1" on:scroll={handleSidebarScroll}>
-                    {#if !sidebarCollapsed}
-                        <button
-                            type="button"
-                            class="mx-1 mt-1 px-2 py-1 rounded sidebar-panel border sidebar-border text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-1.5"
-                            on:click={toggleStatusPanel}
-                        >
-                            <span class="material-icons-round text-[14px] {getSystemTitleClass()}">monitor_heart</span><span class={getSystemTitleClass()}>Status</span>
-                            <span class="ml-auto material-icons-round text-[16px] sidebar-icon-dim">{statusPanelExpanded ? 'expand_less' : 'expand_more'}</span>
-                        </button>
-                    {/if}
-                    {#if sidebarCollapsed}
-                        <button
-                            type="button"
-                            class="rounded flex items-center gap-2 px-2 sidebar-panel border sidebar-border min-w-0 overflow-hidden h-10 justify-center"
-                            title={statusSummary}
-                            on:click={expandSidebar}
-                        >
-                            <span class="w-2 h-2 rounded-full {getSystemDotClass($systemStatus)}"></span>
-                            <span class="material-icons-round text-[18px] {getSystemIconClass($systemStatus)}">monitor_heart</span>
-                        </button>
-                    {:else if statusPanelExpanded}
-                        <div class="mx-1 mb-1 space-y-1">
-                            {#if isSystemCritical}
-                                <button
-                                    type="button"
-                                    class={`flex items-center gap-2 px-2 py-1 rounded border sidebar-panel-soft ${getSystemSlotClass()}`}
-                                    on:click={openDiagnosticPanel}
-                                >
-                                    <span class="material-icons-round text-[14px] {getSystemIconClass($systemStatus)}">healing</span>
-                                    <span class="text-[10px] font-mono tracking-widest flex-1">诊断直达</span>
-                                    <span class="text-[10px] font-mono tracking-widest">{isOffline ? 'Health' : 'Autoheal'}</span>
-                                </button>
-                            {/if}
-                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSystemSlotClass()}`}>
-                                <span class="text-[10px] font-mono tracking-widest">SYSTEM</span>
-                                <span class="text-[10px] font-mono tracking-widest">{$systemStatus}</span>
-                            </div>
-                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSecondarySlotClass()}`}>
-                                <span class="text-[10px] font-mono tracking-widest">SRC</span>
-                                <span class="text-[10px] font-mono tracking-widest">{formatBigNumber(totalSources)}</span>
-                            </div>
-                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSecondarySlotClass()}`}>
-                                <span class="text-[10px] font-mono tracking-widest">WS</span>
-                                <span class="text-[10px] font-mono tracking-widest">{$isConnected ? '✓' : '×'}</span>
-                            </div>
-                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSecondarySlotClass()}`}>
-                                <span class="text-[10px] font-mono tracking-widest">API</span>
-                                <span class="text-[10px] font-mono tracking-widest">{apiOk ? '✓' : '×'}{apiOk && apiLatencyMs != null ? ` ${apiLatencyMs}ms` : ''}</span>
-                            </div>
-                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSecondarySlotClass()}`}>
-                                <span class="text-[10px] font-mono tracking-widest">HEALTH</span>
-                                <span class="text-[10px] font-mono tracking-widest">{formatAgeSeconds(healthUpdatedAt, uiNow)}</span>
-                            </div>
-                            <div class={`flex items-center justify-between px-2 py-1 rounded border sidebar-panel-soft ${getSecondarySlotClass()}`}>
-                                <span class="text-[10px] font-mono tracking-widest">PROFILE</span>
-                                <span class="text-[10px] font-mono tracking-widest">
-                                    {$mediaProfileStats.total
-                                        ? `${formatPercent($mediaProfileStats.rate)} ${$mediaProfileStats.hit}/${$mediaProfileStats.total}`
-                                        : '—'}
-                                </span>
-                            </div>
+                {#if autohealDetailExpanded}
+                    <div class="rounded sidebar-panel-soft border sidebar-border p-3">
+                        <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted mb-2 flex items-center gap-2">
+                            <span class="material-icons-round text-[16px] sidebar-icon-muted">travel_explore</span>
+                            <span>Crawler</span>
                         </div>
-                    {/if}
-
-                    {#if !sidebarCollapsed}
-                        <div class="h-px sidebar-divider mx-1 my-2"></div>
-                    {/if}
-
-                    <button
-                        class="relative h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border {activeView === 'gde' ? 'sidebar-active' : 'bg-transparent'}"
-                        class:justify-center={sidebarCollapsed}
-                        on:click={() => togglePanel('gde')}
-                        title="Geographic Diversity Entropy"
-                    >
-                        {#if activeView === 'gde'}
-                            <span class="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full sidebar-indicator"></span>
-                        {/if}
-                        {#if sidebarCollapsed && activeView === 'gde'}
-                            <span class="absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full sidebar-indicator"></span>
-                        {/if}
-                        <span class="material-icons-round text-[18px] {activeView === 'gde' ? 'sidebar-text' : 'sidebar-text-muted'}">diversity_3</span>
-                        {#if !sidebarCollapsed}
-                            <span class="text-[11px] font-mono tracking-widest sidebar-text truncate">Geographic Diversity Entropy</span>
-                            <span class="ml-auto text-[10px] font-mono sidebar-text-quiet flex items-center gap-1">
-                                <span class="material-icons-round text-[16px] sidebar-icon-dim">{expandedPanel === 'gde' ? 'expand_less' : 'expand_more'}</span>
-                            </span>
-                        {/if}
-                    </button>
-
-                    {#if !sidebarCollapsed && expandedPanel === 'gde'}
-                        <div class="mx-1 mb-1 rounded sidebar-panel-soft border sidebar-border overflow-hidden">
-                            <div class="h-9 px-2 flex items-center gap-2 border-b sidebar-border">
-                                <span class="material-icons-round text-[18px] sidebar-icon-muted">diversity_3</span>
-                                <div class="text-xs font-semibold sidebar-text">Geographic Diversity Entropy</div>
-                            </div>
-                            <div class="p-3 text-[11px] sidebar-text-dim space-y-2">
-                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
-                                    <div class="flex items-center justify-between">
-                                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                                            <span class="material-icons-round text-[16px] sidebar-icon-muted">schedule</span>
-                                            <span>Window</span>
-                                        </span>
-                                        <span class="font-mono sidebar-text-quiet">{gdeWindowHours}h</span>
-                                    </div>
-                                    <div class="flex flex-wrap gap-1">
-                                        {#each gdeWindowOptions as hours (hours)}
-                                            <button
-                                                type="button"
-                                                class={`px-2 py-0.5 rounded border sidebar-border text-[10px] font-mono tracking-widest ${gdeWindowHours === hours ? 'sidebar-active sidebar-text' : 'sidebar-panel-sub sidebar-text-muted'}`}
-                                                on:click={() => setGdeWindow(hours)}
-                                            >
-                                                {hours}h
-                                            </button>
-                                        {/each}
-                                    </div>
-                                </div>
-                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
-                                    <div class="flex items-center justify-between">
-                                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                                            <span class="material-icons-round text-[16px] sidebar-icon-muted">tune</span>
-                                            <span>Alpha</span>
-                                        </span>
-                                        <span class="font-mono sidebar-text-quiet">{gdeAlpha.toFixed(2)}</span>
-                                    </div>
-                                    <div class="flex flex-wrap gap-1">
-                                        {#each gdeAlphaOptions as alpha (alpha)}
-                                            <button
-                                                type="button"
-                                                class={`px-2 py-0.5 rounded border sidebar-border text-[10px] font-mono tracking-widest ${gdeAlpha === alpha ? 'sidebar-active sidebar-text' : 'sidebar-panel-sub sidebar-text-muted'}`}
-                                                on:click={() => setGdeAlpha(alpha)}
-                                            >
-                                                α {alpha.toFixed(1)}
-                                            </button>
-                                        {/each}
-                                    </div>
-                                </div>
-                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
-                                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">public</span>
-                                        <span>GDE</span>
-                                    </span>
-                                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.gde)}</span>
-                                </div>
-                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
-                                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">tag</span>
-                                        <span>Entropy (H_norm)</span>
-                                    </span>
-                                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.normalized_shannon)}</span>
-                                </div>
-                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
-                                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">scatter_plot</span>
-                                        <span>Dispersion (D_norm)</span>
-                                    </span>
-                                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.normalized_dispersion)}</span>
-                                </div>
-                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
-                                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">grid_view</span>
-                                        <span>Coverage</span>
-                                    </span>
-                                    <span class="font-mono sidebar-text-quiet">{gdeMetrics ? `${gdeMetrics.country_count}/${gdeMetrics.total_visits}` : '—'}</span>
-                                </div>
-                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
-                                    <div class="flex items-center justify-between">
-                                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                                            <span class="material-icons-round text-[16px] sidebar-icon-muted">trending_up</span>
-                                            <span>Net Growth</span>
-                                        </span>
-                                        <span class="font-mono sidebar-text-quiet">{growthLatest?.day || '—'}</span>
-                                    </div>
-                                    <div class="grid grid-cols-2 gap-2 text-[10px] font-mono sidebar-text-quiet">
-                                        <div class="flex items-center justify-between rounded sidebar-panel-sub border sidebar-border px-2 py-1">
-                                            <span>Media</span>
-                                            <span>{growthLatest ? `${growthLatest.media_sources_net}` : '—'}</span>
-                                        </div>
-                                        <div class="flex items-center justify-between rounded sidebar-panel-sub border sidebar-border px-2 py-1">
-                                            <span>Candidate</span>
-                                            <span>{growthLatest ? formatPercent(growthLatest.candidate_sources_growth_rate) : '—'}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+                        <div class="grid grid-cols-3 gap-2 mb-2">
+                            <button
+                                class="px-2 py-2 rounded border border-emerald-500/30 hover:bg-emerald-500/10 text-emerald-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                                on:click={() => runHighRisk('crawler START', () => controlCrawler('start'))}
+                                disabled={isCrawlerLoading || isOffline || !safetyArmed || $backendThreadStatus.crawler === 'running'}
+                            >
+                                <span class="material-icons-round text-[16px]">play_arrow</span>
+                                <span>Start</span>
+                            </button>
+                            <button
+                                class="px-2 py-2 rounded border border-red-500/30 hover:bg-red-500/10 text-red-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                                on:click={() => runHighRisk('crawler STOP', () => controlCrawler('stop'))}
+                                disabled={isCrawlerLoading || isOffline || !safetyArmed || $backendThreadStatus.crawler !== 'running'}
+                            >
+                                <span class="material-icons-round text-[16px]">stop</span>
+                                <span>Stop</span>
+                            </button>
+                            <button
+                                class="px-2 py-2 rounded border border-amber-500/30 hover:bg-amber-500/10 text-amber-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                                on:click={() => runHighRisk('crawler RESTART', () => controlCrawler('restart'))}
+                                disabled={isCrawlerLoading || isOffline || !safetyArmed}
+                            >
+                                <span class="material-icons-round text-[16px]">restart_alt</span>
+                                <span>Restart</span>
+                            </button>
                         </div>
-                    {/if}
-
-                    {#if !sidebarCollapsed}
-                        <div class="h-px sidebar-divider mx-1 my-2"></div>
-                        <button
-                            type="button"
-                            class="mx-1 px-2 py-1 rounded sidebar-panel border sidebar-border text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-1.5"
-                            on:click={() => { toolsExpanded = !toolsExpanded; registerSidebarActivity(); }}
-                        >
-                            <span class="material-icons-round text-[14px] sidebar-icon-muted">handyman</span><span>Tools</span>
-                            <span class="ml-auto flex items-center gap-1.5">
-                                <span class="px-1.5 py-0.5 rounded sidebar-panel-sub border sidebar-border text-[9px] font-mono tracking-widest sidebar-text-quiet">System</span>
-                                {#if isSystemCritical}
-                                    <span class={`px-1.5 py-0.5 rounded border sidebar-panel-sub text-[10px] font-mono tracking-widest ${getSystemSlotClass()}`}>{$systemStatus}</span>
-                                {/if}
-                                <span class="material-icons-round text-[16px] sidebar-icon-dim">{toolsExpanded ? 'expand_less' : 'expand_more'}</span>
-                            </span>
-                        </button>
-                    {:else}
-                        <div class="h-px sidebar-divider my-1 mx-1"></div>
-                    {/if}
-
-                    <button
-                        class="relative h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border {activeView === 'health' ? 'sidebar-active' : 'bg-transparent'}"
-                        class:justify-center={sidebarCollapsed}
-                        on:click={() => togglePanel('health')}
-                        title="Health"
-                    >
-                        {#if activeView === 'health'}
-                            <span class="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full sidebar-indicator"></span>
-                        {/if}
-                        {#if sidebarCollapsed && activeView === 'health'}
-                            <span class="absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full sidebar-indicator"></span>
-                        {/if}
-                        <span class="material-icons-round text-[18px] {activeView === 'health' ? 'sidebar-text' : 'sidebar-text-muted'}">health_and_safety</span>
-                        {#if !sidebarCollapsed}
-                            <span class="text-[11px] font-mono tracking-widest sidebar-text">Health</span>
-                            <span class="ml-auto text-[10px] font-mono sidebar-text-quiet flex items-center gap-1">
-                                <span class="material-icons-round text-[16px] sidebar-icon-dim">{expandedPanel === 'health' ? 'expand_less' : 'expand_more'}</span>
-                            </span>
-                        {/if}
-                    </button>
-
-                    {#if !sidebarCollapsed && expandedPanel === 'health'}
-                        <div class="mx-1 mb-1 rounded sidebar-panel-soft border sidebar-border overflow-hidden">
-                            <div class="h-9 px-2 flex items-center gap-2 border-b sidebar-border">
-                                <span class="material-icons-round text-[18px] sidebar-icon-muted">health_and_safety</span>
-                                <div class="text-xs font-semibold sidebar-text">Health</div>
-                                <div class="ml-auto flex items-center gap-2">
-                                    <button
-                                        type="button"
-                                        class="px-2 py-0.5 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted"
-                                        on:click={() => { healthDetailExpanded = !healthDetailExpanded; }}
-                                    >
-                                        {healthDetailExpanded ? 'Detail' : 'Summary'}
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="p-3 space-y-2 text-[11px]">
-                                <div class="grid grid-cols-2 gap-2">
-                                    <div class="grid grid-cols-[1fr_auto] items-center sidebar-panel-sub border sidebar-border p-2 rounded">
-                                        <span class="sidebar-text-dim font-mono flex items-center gap-1">
-                                            <span class="material-icons-round text-[14px] sidebar-icon-dim">storage</span>
-                                            <span>POSTGRES</span>
-                                        </span>
-                                        <span class="font-mono {getStatusColor($serviceStatus.postgres)}">{$serviceStatus.postgres?.toUpperCase() || 'UNK'}</span>
-                                    </div>
-                                    <div class="grid grid-cols-[1fr_auto] items-center sidebar-panel-sub border sidebar-border p-2 rounded">
-                                        <span class="sidebar-text-dim font-mono flex items-center gap-1">
-                                            <span class="material-icons-round text-[14px] sidebar-icon-dim">memory</span>
-                                            <span>REDIS</span>
-                                        </span>
-                                        <span class="font-mono {getStatusColor($serviceStatus.redis)}">{$serviceStatus.redis?.toUpperCase() || 'UNK'}</span>
-                                    </div>
-                                </div>
-                                {#if healthDetailExpanded}
-                                    <div>
-                                        <div class="text-[10px] font-mono sidebar-text-dim tracking-widest mb-2 flex items-center gap-2">
-                                            <span class="material-icons-round text-[14px] sidebar-icon-dim">route</span>
-                                            <span>Threads</span>
-                                        </div>
-                                        <div class="grid grid-cols-3 gap-2">
-                                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
-                                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
-                                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">travel_explore</span>
-                                                    <span>Crawler</span>
-                                                </div>
-                                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</div>
-                                            </div>
-                                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
-                                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
-                                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">analytics</span>
-                                                    <span>Analyzer</span>
-                                                </div>
-                                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.analyzer)}">{$backendThreadStatus.analyzer?.toUpperCase() || 'UNK'}</div>
-                                            </div>
-                                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
-                                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
-                                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">delete_sweep</span>
-                                                    <span>Cleanup</span>
-                                                </div>
-                                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.cleanup)}">{$backendThreadStatus.cleanup?.toUpperCase() || 'UNK'}</div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                {/if}
-                            </div>
-                        </div>
-                    {/if}
-
-                    <button
-                        class="relative h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border {activeView === 'autoheal' ? 'sidebar-active' : 'bg-transparent'}"
-                        class:justify-center={sidebarCollapsed}
-                        on:click={() => togglePanel('autoheal')}
-                        title="Autoheal"
-                    >
-                        {#if activeView === 'autoheal'}
-                            <span class="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full sidebar-indicator"></span>
-                        {/if}
-                        {#if sidebarCollapsed && activeView === 'autoheal'}
-                            <span class="absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full sidebar-indicator"></span>
-                        {/if}
-                        <span class="material-icons-round text-[18px] {activeView === 'autoheal' ? 'sidebar-text' : 'sidebar-text-muted'}">auto_fix_high</span>
-                        {#if !sidebarCollapsed}
-                            <span class="text-[11px] font-mono tracking-widest sidebar-text">Autoheal</span>
-                            <span class="ml-auto text-[10px] font-mono sidebar-text-quiet flex items-center gap-1">
-                                <span class="material-icons-round text-[16px] sidebar-icon-dim">{expandedPanel === 'autoheal' ? 'expand_less' : 'expand_more'}</span>
-                            </span>
-                        {/if}
-                    </button>
-
-                    {#if !sidebarCollapsed && expandedPanel === 'autoheal'}
-                        <div class="mx-1 mb-1 space-y-3">
-                            <div class="rounded sidebar-panel-soft border sidebar-border p-3">
-                                <div class="flex items-center justify-between">
-                                    <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-2">
-                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">shield</span>
-                                        <span>Safety</span>
-                                    </div>
-                                    <div class="flex items-center gap-2">
-                                        <button
-                                            type="button"
-                                            class="px-2 py-0.5 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted"
-                                            on:click={() => { autohealDetailExpanded = !autohealDetailExpanded; }}
-                                        >
-                                            {autohealDetailExpanded ? 'Detail' : 'Summary'}
-                                        </button>
-                                        {#if isDegraded}
-                                            <span class="px-2 py-0.5 rounded border border-yellow-500/40 bg-yellow-500/10 text-yellow-200 text-[10px] font-mono tracking-widest flex items-center gap-1">
-                                                <span class="material-icons-round text-[14px] text-yellow-200">warning_amber</span>
-                                                <span>DEGRADED</span>
-                                            </span>
-                                        {/if}
-                                        <button
-                                            class="px-2 py-1 rounded border text-[10px] font-mono tracking-widest disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 {safetyArmed ? 'border-red-500/40 bg-red-500/10 text-red-200' : 'sidebar-panel-sub sidebar-border sidebar-text'}"
-                                            on:click={toggleSafety}
-                                            disabled={isOffline}
-                                            aria-pressed={safetyArmed}
-                                            title={isOffline ? 'Offline: Controls locked' : safetyArmed ? 'Disarm high-risk controls' : 'Arm high-risk controls'}
-                                        >
-                                            <span class="material-icons-round text-[14px]">{safetyArmed ? 'lock_open' : 'lock'}</span>
-                                            {safetyArmed ? 'ARMED' : 'SAFE'}
-                                        </button>
-                                    </div>
-                                </div>
-                                <div class="mt-2 text-[11px] sidebar-text-dim font-mono">
-                                    {#if isOffline}
-                                        OFFLINE LOCK
-                                    {:else if safetyArmed}
-                                        High-risk actions enabled.
-                                    {:else}
-                                        High-risk actions blocked.
-                                    {/if}
-                                </div>
-                            </div>
-
-                            {#if autohealDetailExpanded}
-                                <div class="rounded sidebar-panel-soft border sidebar-border p-3">
-                                    <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted mb-2 flex items-center gap-2">
-                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">travel_explore</span>
-                                        <span>Crawler</span>
-                                    </div>
-                                    <div class="grid grid-cols-3 gap-2 mb-2">
-                                        <button
-                                            class="px-2 py-2 rounded border border-emerald-500/30 hover:bg-emerald-500/10 text-emerald-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
-                                            on:click={() => runHighRisk('crawler START', () => controlCrawler('start'))}
-                                            disabled={isCrawlerLoading || isOffline || !safetyArmed || $backendThreadStatus.crawler === 'running'}
-                                        >
-                                            <span class="material-icons-round text-[16px]">play_arrow</span>
-                                            <span>Start</span>
-                                        </button>
-                                        <button
-                                            class="px-2 py-2 rounded border border-red-500/30 hover:bg-red-500/10 text-red-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
-                                            on:click={() => runHighRisk('crawler STOP', () => controlCrawler('stop'))}
-                                            disabled={isCrawlerLoading || isOffline || !safetyArmed || $backendThreadStatus.crawler !== 'running'}
-                                        >
-                                            <span class="material-icons-round text-[16px]">stop</span>
-                                            <span>Stop</span>
-                                        </button>
-                                        <button
-                                            class="px-2 py-2 rounded border border-amber-500/30 hover:bg-amber-500/10 text-amber-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
-                                            on:click={() => runHighRisk('crawler RESTART', () => controlCrawler('restart'))}
-                                            disabled={isCrawlerLoading || isOffline || !safetyArmed}
-                                        >
-                                            <span class="material-icons-round text-[16px]">restart_alt</span>
-                                            <span>Restart</span>
-                                        </button>
-                                    </div>
-                                    <div class="text-[10px] font-mono sidebar-text-dim sidebar-panel-sub border sidebar-border p-2 rounded min-h-[32px]">
-                                        {#if isCrawlerLoading}
-                                            Processing…
-                                        {:else}
-                                            {crawlerMessage || 'Ready.'}
-                                        {/if}
-                                    </div>
-                                </div>
-
-                                <div class="rounded sidebar-panel-soft border sidebar-border p-3">
-                                    <div class="flex items-center justify-between">
-                                        <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-2">
-                                            <span class="material-icons-round text-[16px] sidebar-icon-muted">auto_fix_high</span>
-                                            <span>Autoheal</span>
-                                        </div>
-                                        <button
-                                            class="px-2 py-1 rounded border border-amber-500/30 hover:bg-amber-500/10 text-amber-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                                            on:click={() => runHighRisk('autoheal FORCE', triggerHeal)}
-                                            disabled={isCrawlerLoading || isOffline || !safetyArmed}
-                                        >
-                                            <span class="material-icons-round text-[14px]">bolt</span>
-                                            Force
-                                        </button>
-                                    </div>
-                                    <div class="mt-2 text-[11px] sidebar-text-dim">
-                                        Crawler: <span class="{getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</span>
-                                    </div>
-                                </div>
+                        <div class="text-[10px] font-mono sidebar-text-dim sidebar-panel-sub border sidebar-border p-2 rounded min-h-[32px]">
+                            {#if isCrawlerLoading}
+                                Processing…
                             {:else}
-                                <div class="rounded sidebar-panel-sub border sidebar-border p-2 flex items-center justify-between text-[10px] font-mono">
-                                    <span class="sidebar-text-muted flex items-center gap-2">
-                                        <span class="material-icons-round text-[14px] sidebar-icon-muted">travel_explore</span>
-                                        <span>Crawler</span>
-                                    </span>
-                                    <span class="{getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</span>
-                                </div>
+                                {crawlerMessage || 'Ready.'}
                             {/if}
                         </div>
-                    {/if}
+                    </div>
 
-                    {#if toolsExpanded}
-                        <div class="h-px sidebar-divider mx-1 my-2"></div>
-                        <button
-                            class="h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border sidebar-text-muted {disabledClass}"
-                            class:justify-center={sidebarCollapsed}
-                            on:click={() => emitMapCommandWithActivity('export_png_1200')}
-                            title="Export PNG (1200 DPI)"
-                        >
-                            <span class="material-icons-round text-[18px]">image</span>
-                            {#if !sidebarCollapsed}
-                                <span class="text-[11px] font-mono tracking-widest">Export PNG</span>
-                                <span class="ml-auto text-[10px] font-mono sidebar-text-quiet">1200 DPI</span>
-                            {/if}
-                        </button>
-
-                        <button
-                            class="h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border sidebar-text-muted {disabledClass}"
-                            class:justify-center={sidebarCollapsed}
-                            on:click={() => emitMapCommandWithActivity('export_svg_1200')}
-                            title="Export SVG"
-                        >
-                            <span class="material-icons-round text-[18px]">schema</span>
-                            {#if !sidebarCollapsed}
-                                <span class="text-[11px] font-mono tracking-widest">Export SVG</span>
-                                <span class="ml-auto text-[10px] font-mono sidebar-text-quiet">Vector</span>
-                            {/if}
-                        </button>
-
-                        <button
-                            class="h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border sidebar-text-muted {disabledClass}"
-                            class:justify-center={sidebarCollapsed}
-                            on:click={() => emitMapCommandWithActivity('reset_view')}
-                            title="Reset View"
-                        >
-                            <span class="material-icons-round text-[18px]">my_location</span>
-                            {#if !sidebarCollapsed}
-                                <span class="text-[11px] font-mono tracking-widest">Reset View</span>
-                            {/if}
-                        </button>
-
-                        <button
-                            class="h-10 rounded flex items-center gap-2 px-2 sidebar-hoverable border sidebar-border sidebar-text-muted"
-                            class:justify-center={sidebarCollapsed}
-                            on:click={toggleSoundWithActivity}
-                            title={$soundEnabled ? 'Sound: On' : 'Sound: Off'}
-                            aria-pressed={$soundEnabled}
-                        >
-                            <span class="material-icons-round text-[18px]">{$soundEnabled ? 'volume_up' : 'volume_off'}</span>
-                            {#if !sidebarCollapsed}
-                                <span class="text-[11px] font-mono tracking-widest">Sound</span>
-                                <span class="ml-auto text-[10px] font-mono sidebar-text-quiet">{$soundEnabled ? 'On' : 'Off'}</span>
-                            {/if}
-                        </button>
-                    {/if}
-                </nav>
+                    <div class="rounded sidebar-panel-soft border sidebar-border p-3">
+                        <div class="flex items-center justify-between">
+                            <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-2">
+                                <span class="material-icons-round text-[16px] sidebar-icon-muted">auto_fix_high</span>
+                                <span>Autoheal</span>
+                            </div>
+                            <button
+                                class="px-2 py-1 rounded border border-amber-500/30 hover:bg-amber-500/10 text-amber-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                                on:click={() => runHighRisk('autoheal FORCE', triggerHeal)}
+                                disabled={isCrawlerLoading || isOffline || !safetyArmed}
+                            >
+                                <span class="material-icons-round text-[14px]">bolt</span>
+                                Force
+                            </button>
+                        </div>
+                        <div class="mt-2 text-[11px] sidebar-text-dim">
+                            Crawler: <span class="{getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</span>
+                        </div>
+                    </div>
+                {:else}
+                    <div class="rounded sidebar-panel-sub border sidebar-border p-2 flex items-center justify-between text-[10px] font-mono">
+                        <span class="sidebar-text-muted flex items-center gap-2">
+                            <span class="material-icons-round text-[14px] sidebar-icon-muted">travel_explore</span>
+                            <span>Crawler</span>
+                        </span>
+                        <span class="{getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</span>
+                    </div>
+                {/if}
             </div>
-        </aside>
+        </Sidebar>
     </div>
 </main>
 

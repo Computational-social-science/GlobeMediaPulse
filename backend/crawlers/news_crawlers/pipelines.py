@@ -23,7 +23,7 @@ except Exception as e:
     logger.warning(f"Spacy import failed: {e}. Geolocation might be limited.")
     SPACY_AVAILABLE = False
     
-from backend.operators.intelligence.geoparsing import GeoParser
+from backend.operators.intelligence.geo_resolver import GeoResolver
 from backend.operators.storage import storage_operator
 from backend.operators.intelligence.source_classifier import source_classifier
 # from backend.operators.vision.fingerprinter import visual_fingerprinter
@@ -180,31 +180,14 @@ class ClassificationPipeline:
     Research Motivation:
         - Enhances raw crawled items with intelligence data (Tier, Country, Domain).
         - Ensures consistent data labeling before storage or further processing.
-        - [NEW] Uses Advanced GeoParser (Geograpy3 + WHOIS + Consensus) for location.
+        - [NEW] Uses GeoResolver (Strategy Pattern) for high-performance location.
     """
     def __init__(self):
-        self.geo_parser = None
-        # Manual Overrides for Major Global Media (High Precision)
-        self.domain_overrides = {
-            'nytimes': 'USA', 'wsj': 'USA', 'washingtonpost': 'USA', 'cnn': 'USA', 'foxnews': 'USA', 'usatoday': 'USA', 'nbcnews': 'USA', 'cnbc': 'USA', 'bloomberg': 'USA', 'apnews': 'USA', 'npr': 'USA',
-            'bbc': 'GBR', 'reuters': 'GBR', 'theguardian': 'GBR', 'independent': 'GBR', 'dailymail': 'GBR', 'telegraph': 'GBR', 'skynews': 'GBR',
-            'aljazeera': 'QAT',
-            'rt': 'RUS', 'sputniknews': 'RUS', 'tass': 'RUS', 'moscowtimes': 'RUS',
-            'xinhua': 'CHN', 'chinadaily': 'CHN', 'scmp': 'HKG', 'globaltimes': 'CHN',
-            'dw': 'DEU', 'france24': 'FRA', 'euronews': 'FRA',
-            'kyodonews': 'JPN', 'japantimes': 'JPN', 'asahi': 'JPN',
-            'yonhap': 'KOR', 'koreaherald': 'KOR',
-            'thehindu': 'IND', 'timesofindia': 'IND', 'hindustantimes': 'IND',
-            'straitstimes': 'SGP', 'bangkokpost': 'THA', 'jakartapost': 'IDN',
-            'smh': 'AUS', 'abc': 'AUS',
-            'globeandmail': 'CAN', 'cbc': 'CAN',
-            'folha': 'BRA', 'clarin': 'ARG'
-        }
+        self.geo_resolver = None
 
     def open_spider(self, spider):
-        # Initialize GeoParser with Redis URL from settings
-        redis_url = spider.settings.get('REDIS_URL')
-        self.geo_parser = GeoParser(redis_url)
+        # Initialize GeoResolver (No Redis dependency)
+        self.geo_resolver = GeoResolver()
 
     def process_item(self, item, spider):
         # Skip enrichment for structural items
@@ -219,17 +202,13 @@ class ClassificationPipeline:
             if domain:
                 # Construct pseudo-URL for Geoparsing
                 pseudo_url = f"http://{domain}"
-                country_code, confidence = self.geo_parser.resolve(
-                    url=pseudo_url,
-                    text="", # No content
-                    tier=2,  # Default tier for candidates
-                    existing_code='UNK'
-                )
-                adapter['country_code'] = country_code
-                adapter['country_confidence'] = confidence
+                result = self.geo_resolver.resolve(pseudo_url)
                 
-                # [NEW] Inject Lat/Lng
-                coords = self.geo_parser.get_coords(country_code)
+                adapter['country_code'] = result.get('country_code', 'UNK')
+                adapter['country_confidence'] = result.get('confidence', 0.0)
+                
+                # Inject Lat/Lng
+                coords = self.geo_resolver.get_coords(adapter['country_code'])
                 if coords:
                     adapter['country_lat'] = coords.get('lat')
                     adapter['country_lng'] = coords.get('lng')
@@ -246,49 +225,15 @@ class ClassificationPipeline:
             if not adapter.get('source_domain'):
                 adapter['source_domain'] = classification.get('source_domain')
             
-            # 2. Determine Initial 'Existing Code'
-            # Priority: Classifier > Domain Override > TLD
-            existing_code = 'UNK'
+            # 2. Resolve Country using GeoResolver
+            # GeoResolver handles TLD, Heuristics, WHOIS internally.
+            result = self.geo_resolver.resolve(url)
             
-            # A. Classifier
-            if classification.get('country'):
-                existing_code = classification.get('country')
-            
-            # B. Domain Override (if UNK)
-            if existing_code == 'UNK':
-                domain = adapter.get('source_domain') or urlparse(url).netloc
-                domain_lower = domain.lower()
-                for key, code in self.domain_overrides.items():
-                    if key in domain_lower:
-                        existing_code = code
-                        break
-            
-            # C. TLD (if UNK)
-            if existing_code == 'UNK':
-                existing_code = self.geo_parser.infer_from_tld(url)
-            
-            # 3. Advanced Geoparsing (Consensus: Existing + WHOIS + Text)
-            # Prepare text content for extraction
-            # CandidateSourceItem might not have content, so use title or empty string
-            text_content = (adapter.get('title') or "") + " " + (adapter.get('content') or "")
-            # Limit text length to avoid performance hit
-            text_content = text_content[:5000]
-            
-            # Resolve
-            # Default tier to 2 if not found
-            tier = adapter.get('source_tier') or 2
-            country_code, confidence = self.geo_parser.resolve(
-                url=url,
-                text=text_content,
-                tier=tier,
-                existing_code=existing_code
-            )
-            
-            adapter['country_code'] = country_code
-            adapter['country_confidence'] = confidence
+            adapter['country_code'] = result.get('country_code', 'UNK')
+            adapter['country_confidence'] = result.get('confidence', 0.0)
 
-            # [NEW] Inject Lat/Lng
-            coords = self.geo_parser.get_coords(country_code)
+            # Inject Lat/Lng
+            coords = self.geo_resolver.get_coords(adapter['country_code'])
             if coords:
                 adapter['country_lat'] = coords.get('lat')
                 adapter['country_lng'] = coords.get('lng')

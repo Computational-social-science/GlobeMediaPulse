@@ -49,6 +49,6 @@ class Settings(BaseSettings):
 
     SIMHASH_SIMILARITY_THRESHOLD: int = int(os.getenv("SIMHASH_SIMILARITY_THRESHOLD", "3"))
     
-    model_config = SettingsConfigDict(case_sensitive=True)
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
 settings = Settings()

@@ -184,7 +184,11 @@ class UniversalNewsSpider(RedisSpider):
         # 1. Content Extraction
         downloaded = response.body
         # include_comments=False: Focus on journalistic content
-        result = trafilatura.extract(downloaded, include_comments=False, include_tables=False, no_fallback=True)
+        try:
+            result = trafilatura.extract(downloaded, include_comments=False, include_tables=False, no_fallback=True)
+        except Exception as e:
+            self.logger.error(f"Trafilatura extraction failed for {response.url}: {e}")
+            result = None
         
         if result:
             item = NewsArticleItem()
@@ -229,3 +233,5 @@ class UniversalNewsSpider(RedisSpider):
                     cand_item['found_on'] = response.url
                     cand_item['tier_suggestion'] = 'Tier-2'
                     yield cand_item
+        else:
+            self.logger.warning(f"Empty content extracted for {response.url}")

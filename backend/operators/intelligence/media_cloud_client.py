@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.models import MediaSource
 from backend.core.database import SessionLocal
+from backend.utils.retry import retry_with_backoff
 
 from urllib.parse import urlparse
 
@@ -27,6 +28,7 @@ class MediaCloudIntegrator:
             self.directory_api = mediacloud.api.DirectoryApi(self.api_key)
             self.search_api = mediacloud.api.SearchApi(self.api_key)
 
+    @retry_with_backoff(retries=3, backoff_in_seconds=2.0, raise_on_failure=False, fallback_value=None)
     def get_national_collection_id(self, country_name: str) -> Optional[int]:
         """
         Search for a national collection ID by country name.
@@ -63,32 +65,31 @@ class MediaCloudIntegrator:
             return known_collections[country_name]
 
         # 2. Dynamic Search
-        try:
-            # Search for collections with "CountryName - National"
-            # This is the standard naming convention in Media Cloud for national collections
-            name_query = f"{country_name} - National"
-            results = self.directory_api.collection_list(name=name_query, limit=5)
-            for col in results.get('results', []):
-                # Strict check to ensure we get the right one
-                # e.g. "Kenya - National"
-                col_name = col.get('name', '')
-                if col_name.lower() == name_query.lower() or col_name.lower() == f"national - {country_name.lower()}":
-                    logger.info(f"Dynamically found collection for {country_name}: {col['id']} ({col_name})")
-                    return col['id']
+        # Removed try/except to allow retry_with_backoff to handle transient errors
+        
+        # Search for collections with "CountryName - National"
+        # This is the standard naming convention in Media Cloud for national collections
+        name_query = f"{country_name} - National"
+        results = self.directory_api.collection_list(name=name_query, limit=5)
+        for col in results.get('results', []):
+            # Strict check to ensure we get the right one
+            # e.g. "Kenya - National"
+            col_name = col.get('name', '')
+            if col_name.lower() == name_query.lower() or col_name.lower() == f"national - {country_name.lower()}":
+                logger.info(f"Dynamically found collection for {country_name}: {col['id']} ({col_name})")
+                return col['id']
+                
+        # Fallback: Try just country name but require "National" in label
+        results = self.directory_api.collection_list(name=country_name, limit=20)
+        for col in results.get('results', []):
+            col_name = col.get('name', '')
+            if "national" in col_name.lower() and country_name.lower() in col_name.lower():
+                logger.info(f"Dynamically found collection for {country_name}: {col['id']} ({col_name})")
+                return col['id']
                     
-            # Fallback: Try just country name but require "National" in label
-            results = self.directory_api.collection_list(name=country_name, limit=20)
-            for col in results.get('results', []):
-                col_name = col.get('name', '')
-                if "national" in col_name.lower() and country_name.lower() in col_name.lower():
-                    logger.info(f"Dynamically found collection for {country_name}: {col['id']} ({col_name})")
-                    return col['id']
-                    
-        except Exception as e:
-            logger.error(f"Error searching collection for {country_name}: {e}")
-            
         return None
 
+    @retry_with_backoff(retries=3, backoff_in_seconds=2.0, raise_on_failure=False, fallback_value=[])
     def fetch_sources_from_collection(self, collection_id: int, limit: int = 1000) -> List[Dict]:
         """
         Fetch media sources from a specific Media Cloud collection.
@@ -98,21 +99,18 @@ class MediaCloudIntegrator:
             
         sources = []
         offset = 0
-        try:
-            while True:
-                response = self.directory_api.source_list(collection_id=collection_id, limit=limit, offset=offset)
-                batch = response.get('results', [])
-                sources.extend(batch)
-                
-                if response.get('next') is None or len(sources) >= limit:
-                    break
-                offset += len(batch)
-                
-            logger.info(f"Fetched {len(sources)} sources from collection {collection_id}")
-            return sources
-        except Exception as e:
-            logger.error(f"Error fetching sources from collection {collection_id}: {e}")
-            return []
+        # Removed try/except for retry_with_backoff
+        while True:
+            response = self.directory_api.source_list(collection_id=collection_id, limit=limit, offset=offset)
+            batch = response.get('results', [])
+            sources.extend(batch)
+            
+            if response.get('next') is None or len(sources) >= limit:
+                break
+            offset += len(batch)
+            
+        logger.info(f"Fetched {len(sources)} sources from collection {collection_id}")
+        return sources
 
     def sync_sources_to_db(self, sources: List[Dict], default_tier: int = 2, country_code: str = "UNK"):
         """
