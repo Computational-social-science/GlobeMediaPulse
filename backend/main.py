@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import redis.asyncio as redis
 import os
+import sentry_sdk
 
 from backend.core.database import db_manager
 from backend.api.endpoints import router as api_router
@@ -18,6 +19,16 @@ from backend.core.monitoring import thread_status
 from backend.operators.system.guardian import system_guardian
 from backend.operators.system.process_manager import process_manager
 from backend.core.logging_handlers import ws_log_handler
+
+# Initialize Sentry for Backend Monitoring
+# Research Motivation: Real-time error tracking and performance monitoring in production.
+sentry_dsn = os.getenv("SENTRY_DSN")
+if sentry_dsn:
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        traces_sample_rate=1.0, # Capture 100% of transactions for debugging
+        profiles_sample_rate=1.0,
+    )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
