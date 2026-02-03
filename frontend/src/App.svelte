@@ -13,9 +13,11 @@
         audioVolume,
         mapCommand,
         mediaProfileStats,
+        isSetupWizardOpen, // Imported
     } from '@stores';
     import MapContainer from '@components/MapContainer.svelte';
     import Sidebar from '@components/Sidebar.svelte';
+    import SetupWizard from '@components/SetupWizard.svelte';
     import { DATA } from '@lib/data.js';
     import {
         getStatusColor,
@@ -847,6 +849,22 @@
             <div class="text-xs font-mono tracking-widest text-slate-300">Initializing…</div>
         </div>
     {/if}
+
+    {#if $isSetupWizardOpen}
+      <SetupWizard onClose={() => isSetupWizardOpen.set(false)} />
+    {/if}
+
+    <!-- Setup Trigger Button (Bottom Right) -->
+    <div class="fixed bottom-6 right-6 z-40">
+       <button 
+         class="bg-cyan-600 hover:bg-cyan-500 text-white p-4 rounded-full shadow-lg shadow-cyan-900/50 transition-all hover:scale-110 flex items-center gap-2"
+         on:click={() => isSetupWizardOpen.set(true)}
+         title="Open Setup Wizard"
+       >
+         <span class="text-xl">🚀</span>
+         <span class="font-bold hidden group-hover:block">Setup</span>
+       </button>
+    </div>
 
     <div class="h-full min-h-0 relative">
         <section class="absolute inset-0 bg-slate-950">

@@ -64,3 +64,5 @@ export const backendThreadStatus = writable({
     analyzer: 'unknown',
     cleanup: 'unknown'
 });
+
+export const isSetupWizardOpen = writable(false);

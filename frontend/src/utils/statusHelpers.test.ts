@@ -1,11 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
     getStatusColor,
-    getThreadStatusColor,
-    getSystemIconClass,
     getSystemDotClass,
     getSystemSlotClass,
-    getSecondarySlotClass,
     getSystemTitleClass
 } from '@/utils/statusHelpers';
 
