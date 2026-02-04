@@ -9,6 +9,9 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 TIMEOUT_S = float(os.getenv("VERIFY_TIMEOUT_S", "5") or "5")
 PIPELINE_TIMEOUT_S = float(os.getenv("VERIFY_PIPELINE_TIMEOUT_S", "10") or "10")
 REQUIRE_CRAWLER = os.getenv("VERIFY_REQUIRE_CRAWLER", "0").strip().lower() in ("1", "true", "yes", "on")
+STABILITY_MINUTES = float(os.getenv("VERIFY_CRAWLER_STABILITY_MINUTES", "0") or "0")
+STABILITY_INTERVAL_S = float(os.getenv("VERIFY_CRAWLER_STABILITY_INTERVAL_S", "30") or "30")
+REQUIRE_READY = os.getenv("VERIFY_CRAWLER_REQUIRE_READY", "1").strip().lower() in ("1", "true", "yes", "on")
 
 def log(msg, status="INFO"):
     print(f"[{status}] {msg}")
@@ -37,6 +40,62 @@ def test_endpoint(url, description, method="GET", expect_json=True, timeout_s=TI
     except Exception as e:
         log(f"{description}: EXCEPTION ({e})", "ERROR")
         return False, None
+
+def _derive_system_status(health_full):
+    status = str((health_full or {}).get("status") or "").lower()
+    if status == "ok":
+        return "ONLINE"
+    if status == "degraded":
+        return "DEGRADED"
+    return "OFFLINE"
+
+def _is_crawler_ready(health_full, crawler_status):
+    services = (health_full or {}).get("services") or {}
+    threads = (health_full or {}).get("threads") or {}
+    system_status = str((health_full or {}).get("status") or "").lower()
+    crawler_service_ok = str(services.get("crawler") or "").lower() == "ok"
+    crawler_thread = str(threads.get("crawler") or "").lower()
+    crawler_thread_ok = crawler_thread in ("running", "active", "ok")
+    crawler_running = bool((crawler_status or {}).get("running"))
+    return system_status == "ok" and crawler_service_ok and crawler_thread_ok and crawler_running
+
+def run_crawler_stability_check():
+    if STABILITY_MINUTES <= 0:
+        return 0
+    failures = 0
+    end_at = time.time() + (STABILITY_MINUTES * 60.0)
+    attempt = 0
+    log(f"Crawler Stability Check: {STABILITY_MINUTES:.1f}min @ {STABILITY_INTERVAL_S:.0f}s", "INFO")
+    while time.time() < end_at:
+        attempt += 1
+        ok_health, health_full = test_endpoint(
+            f"{BACKEND_URL}/health/full",
+            f"Health Sample {attempt}",
+            expect_json=True,
+            timeout_s=TIMEOUT_S,
+        )
+        ok_crawler, crawler = test_endpoint(
+            f"{API_BASE_URL}/system/crawler/status",
+            f"Crawler Sample {attempt}",
+            expect_json=True,
+            timeout_s=TIMEOUT_S,
+        )
+        if not ok_health or not ok_crawler:
+            failures += 1
+        else:
+            system_status = _derive_system_status(health_full)
+            ready = _is_crawler_ready(health_full, crawler)
+            if REQUIRE_READY and not ready:
+                failures += 1
+                log(f"Crawler READY: FAIL | System={system_status} | Threads={health_full.get('threads')} | Services={health_full.get('services')}", "ERROR")
+            else:
+                log(f"Crawler READY: PASS | System={system_status}", "INFO")
+        time.sleep(STABILITY_INTERVAL_S)
+    if failures:
+        log(f"Crawler Stability Check: FAILED ({failures} issues)", "ERROR")
+    else:
+        log("Crawler Stability Check: PASSED", "SUCCESS")
+    return failures
 
 def run_verification():
     log("Starting Full Stack Verification...", "INFO")
@@ -103,6 +162,8 @@ def run_verification():
             log("Heatmap data received.", "INFO")
     else:
         failures += 1
+
+    failures += run_crawler_stability_check()
 
     if failures:
         log(f"Verification Complete with {failures} failure(s).", "ERROR")

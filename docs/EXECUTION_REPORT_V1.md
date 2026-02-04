@@ -43,5 +43,51 @@
 
 ---
 
-## 4. 结论
-核心建议项均已高质量落地，系统在**代码规范性**、**部署易用性**及**运行稳定性**上取得了显著突破。建议进入下一阶段的功能迭代。
+## 4. Crawler UNKNOWN 修复报告 (2026-02-04)
+
+### 4.1 现象与影响
+- **现象**：Docker 环境下 crawler 实际健康，但状态栏长期显示 `UNKNOWN`。
+- **影响**：状态栏与真实状态不一致，降低运维判断的可信度。
+
+### 4.2 根因定位
+- **根因**：外部 crawler 模式仅更新 `services.crawler`，未填充 `threads.crawler`，前端线程面板显示 `unknown`。
+- **链路定位**：`/health/full` 返回 `threads` 缺少 crawler 字段；状态栏 `System=ONLINE` 依赖 `status`，导致 UI 显示冲突。
+
+### 4.3 修复措施
+- **后端状态链路**：外部 crawler 模式下补充 `threads.crawler`，与心跳存活一致。
+- **自动巡检**：增加 30 分钟连续稳定性核验逻辑，强制校验 `READY` 与状态栏一致。
+
+### 4.4 验证结果
+- **健康检查**：`/health/full` 返回 `threads.crawler=running`，与 `services.crawler=ok` 一致。
+- **稳定性**：`verify_full_stack.py` 支持 30 分钟连续采样验证。
+
+## 5. 核查清单
+
+### 5.1 Docker-compose 服务配置
+- `crawler` 依赖 `db` 与 `redis` 健康状态后启动。
+- `crawler` 通过 `REDIS_URL` + `CRAWLER_HEARTBEAT_KEY` 写入心跳。
+- `crawler` 健康检查脚本基于心跳时间戳判定存活。
+
+### 5.2 数据库连接池参数
+- `/health/full` 的 `metrics.postgres_pool` 提供 `minconn/maxconn/idle/in_use/total`。
+- 连接池由 `DatabaseManager.get_pool_metrics()` 输出。
+
+### 5.3 健康检查接口返回示例
+- `/health/full` 重点字段:
+  - `status=ok`
+  - `services.crawler=ok`
+  - `threads.crawler=running`
+- `/system/crawler/status` 重点字段:
+  - `running=true`
+  - `external=true`
+  - `heartbeat.age_s <= stale_s`
+
+### 5.4 日志关键字段过滤规则
+- `crawler`：`ScrapyErr|ScrapyOut|Traceback|ERROR|CRITICAL`
+- `heartbeat`：`CRAWLER_HEARTBEAT|heartbeat|stale`
+- `db`：`psycopg2|Connection refused|too many connections`
+- `redis`：`ConnectionError|Timeout|READONLY`
+- `health`：`health/full|crawler_health|services.crawler`
+
+## 6. 结论
+核心建议项已完成，crawler 状态链路在外部模式下实现一致性修复，新增 30 分钟稳定性巡检以满足交付要求。

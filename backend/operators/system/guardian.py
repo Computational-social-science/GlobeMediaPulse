@@ -133,11 +133,14 @@ class SystemGuardianOperator:
             Dict containing status of 'postgres', 'redis', 'threads', and global 'status'.
         """
         services = await self._check_services_parallel()
+        external_crawler_thread = None
         if self._external_crawler_enabled():
             ext = self._external_crawler_is_alive() or {}
+            alive = bool(ext.get("alive"))
             services["crawler_diag"] = {"external": True, "heartbeat": ext}
-            services["crawler_health"] = "ok" if bool(ext.get("alive")) else "degraded"
-            services["crawler"] = "ok" if bool(ext.get("alive")) else "error"
+            services["crawler_health"] = "ok" if alive else "degraded"
+            services["crawler"] = "ok" if alive else "error"
+            external_crawler_thread = "running" if alive else "stalled"
         else:
             crawler_diag = process_manager.get_crawler_diagnostics()
             services["crawler_diag"] = crawler_diag
@@ -181,6 +184,8 @@ class SystemGuardianOperator:
                         pass
             
         thread_stats = thread_status.get_status()
+        if external_crawler_thread:
+            thread_stats["crawler"] = external_crawler_thread
         
         postgres_ok = services.get("postgres") in ("ok", "disabled")
         redis_ok = services.get("redis") in ("ok", "disabled")

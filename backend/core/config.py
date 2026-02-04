@@ -1,5 +1,9 @@
 import os
+import re
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 class Settings(BaseSettings):
     """
@@ -11,22 +15,35 @@ class Settings(BaseSettings):
     
     # Database Configuration
     # Default to local Postgres instance if not set
-    _raw_database_url = os.getenv(
-        "DATABASE_URL",
-        "postgresql://postgres:password@localhost:5433/globemediapulse",
-    )
-    DATABASE_URL: str = (
-        _raw_database_url.replace("postgres://", "postgresql://", 1)
-        if _raw_database_url.startswith("postgres://")
-        else _raw_database_url
-    )
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: str = "password"
+    POSTGRES_DB: str = "globemediapulse"
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5433
+    DATABASE_URL: str | None = None
+
+    @model_validator(mode="after")
+    def _build_database_url(self) -> "Settings":
+        if not self.DATABASE_URL or not re.search(r"://[^:]+:[^@]+@", self.DATABASE_URL):
+            self.DATABASE_URL = (
+                f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+                f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+            )
+        return self
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def _normalize_database_url(cls, value: str | None) -> str | None:
+        if value and value.startswith("postgres://"):
+            return value.replace("postgres://", "postgresql://", 1)
+        return value
     
     # Redis Configuration
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     
     # Path Configuration
     # Resolve project root directory dynamically
-    BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    BASE_DIR: str = PROJECT_ROOT
     DATA_DIR: str = os.path.join(BASE_DIR, "backend", "data")
     
     # Feature Flags
@@ -49,6 +66,6 @@ class Settings(BaseSettings):
 
     SIMHASH_SIMILARITY_THRESHOLD: int = int(os.getenv("SIMHASH_SIMILARITY_THRESHOLD", "3"))
     
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
+    model_config = SettingsConfigDict(env_file=os.path.join(PROJECT_ROOT, ".env"), case_sensitive=True, extra="ignore")
 
 settings = Settings()

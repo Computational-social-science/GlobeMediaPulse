@@ -40,7 +40,24 @@ docker-compose up -d
 # Logs: docker-compose logs -f
 ```
 
-### 2.4 Workflow Operations
+### 2.4 Crawler 状态与一致性
+- 关键环境变量（Backend 与 Crawler 容器保持一致）:
+  - `REDIS_URL=redis://redis:6379/0`
+  - `CRAWLER_HEARTBEAT_KEY=gmp:crawler:heartbeat`
+  - `CRAWLER_HEARTBEAT_STALE_S=45`
+  - `CRAWLER_MODE=external`（Docker/Compose 模式建议开启）
+- 健康检查接口:
+  - `GET /health/full`：包含 `services.crawler` 与 `threads.crawler`
+  - `GET /system/crawler/status`：外部心跳状态
+- 本地连续稳定性巡检（30 分钟）:
+```bash
+set VERIFY_CRAWLER_STABILITY_MINUTES=30
+set VERIFY_CRAWLER_STABILITY_INTERVAL_S=30
+set VERIFY_CRAWLER_REQUIRE_READY=1
+python verify_full_stack.py
+```
+
+### 2.5 Workflow Operations
 
 Use backend endpoints (see Swagger at `/docs`):
 

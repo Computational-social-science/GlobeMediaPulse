@@ -58,6 +58,7 @@
     };
 
     const statusStoreTyped = statusStore as Writable<{ health: StatusHealth }>;
+    let staticMode = false;
 
     class SoundManager {
         ctx: AudioContext | null = null;
@@ -409,6 +410,16 @@
         return env.VITE_WS_URL || apiBase.replace(/^http/, 'ws');
     }
 
+    function stripAutohealFromConfig(config: SidebarConfig): SidebarConfig {
+        const base = tidySidebarConfig(config);
+        const groups = base.groups.map((group) => ({
+            ...group,
+            items: group.items.filter((item) => item !== 'autoheal')
+        }));
+        const normalizedGroups = groups.filter((group, index) => group.items.length > 0 || index === 0);
+        return { ...base, groups: normalizedGroups };
+    }
+
     let totalSources = 0;
     let healthCheckTimer: ReturnType<typeof setTimeout>;
     let retryCount = 0;
@@ -446,6 +457,10 @@
     let lastExpandedPanel: 'autoheal' | 'gde' | null = 'gde';
     let activeWindow: 'status' | 'gde' | null = 'status';
     let statusAutohealTab: 'status' | 'autoheal' = 'status';
+    let statusTabs: Array<{ key: 'status' | 'autoheal'; label: string }> = [
+        { key: 'status', label: 'Status' },
+        { key: 'autoheal', label: 'Autoheal' }
+    ];
     let autohealDetailExpanded = false;
     let safetyArmed = false;
     let safetyAutoDisarmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -496,6 +511,13 @@
     $: apiOk = $statusStore.health.apiOk;
     $: apiLatencyMs = $statusStore.health.apiLatencyMs;
     $: healthUpdatedAt = $statusStore.health.updatedAt;
+    $: statusTabs = staticMode
+        ? [{ key: 'status', label: 'Status' }]
+        : [
+              { key: 'status', label: 'Status' },
+              { key: 'autoheal', label: 'Autoheal' }
+          ];
+    $: if (staticMode && statusAutohealTab !== 'status') statusAutohealTab = 'status';
 
     $: growthLatest = growthMetrics.length ? growthMetrics[0] : null;
     $: sidebarConfigTyped = $sidebarConfig as SidebarConfig;
@@ -538,11 +560,16 @@
 
     function handleResetSidebarConfig() {
         if (typeof window !== 'undefined') clearSidebarConfig(window.localStorage);
-        sidebarConfig.set(getDefaultSidebarConfig());
+        const baseConfig = getDefaultSidebarConfig();
+        const nextConfig = staticMode ? stripAutohealFromConfig(baseConfig) : baseConfig;
+        sidebarConfig.set(nextConfig);
     }
 
     function handleTidySidebarConfig() {
-        sidebarConfig.update((current) => tidySidebarConfig(current));
+        sidebarConfig.update((current) => {
+            const next = tidySidebarConfig(current);
+            return staticMode ? stripAutohealFromConfig(next) : next;
+        });
     }
 
     function scheduleSidebarAutoCollapse() {
@@ -593,6 +620,7 @@
     }
 
     function openViewWindow(view: 'autoheal' | 'gde') {
+        if (staticMode && view === 'autoheal') return;
         if (sidebarCollapsed) expandSidebar();
         activeView = view;
         expandedPanel = view;
@@ -949,14 +977,13 @@
     let crawlerMessage = '';
 
     onMount(() => {
+        staticMode = isStaticMode();
         if (typeof window !== 'undefined') {
             const storedSidebarConfig = loadSidebarConfig(window.localStorage);
-            if (storedSidebarConfig) {
-                sidebarConfig.set(storedSidebarConfig);
-            } else {
-                sidebarConfig.set(getDefaultSidebarConfig());
-            }
-            if (!isStaticMode()) {
+            const initialConfig = storedSidebarConfig || getDefaultSidebarConfig();
+            const nextConfig = staticMode ? stripAutohealFromConfig(initialConfig) : initialConfig;
+            sidebarConfig.set(nextConfig);
+            if (!staticMode) {
                 const localUpdated = Number(window.localStorage.getItem(SIDEBAR_LOCAL_UPDATED_KEY) || '0') || 0;
                 const remoteUpdated = Number(window.localStorage.getItem(SIDEBAR_REMOTE_UPDATED_KEY) || '0') || 0;
                 const baseline = Math.max(localUpdated, remoteUpdated);
@@ -977,7 +1004,7 @@
             }
         }
         handleLegacyHealthRedirect();
-        if (isStaticMode()) {
+        if (staticMode) {
             const sources = (DATA as unknown as { MEDIA_SOURCES?: unknown }).MEDIA_SOURCES;
             totalSources = Array.isArray(sources) ? sources.length : 0;
             systemStatus.set('STATIC');
@@ -988,7 +1015,7 @@
             });
         }
         checkSystemHealth();
-        if (!isStaticMode()) webSocketService.connect();
+        if (!staticMode) webSocketService.connect();
         scheduleSidebarAutoCollapse();
 
         const initAudio = () => {
@@ -1017,7 +1044,7 @@
                 return;
             }
             if (key === 'a') {
-                openViewWindow('autoheal');
+                if (!staticMode) openViewWindow('autoheal');
                 e.preventDefault();
                 return;
             }
@@ -1057,18 +1084,23 @@
         window.addEventListener('touchstart', handleActivity, { passive: true });
         window.addEventListener('focus', handleActivity);
 
-        fetchHeaderStats();
-        const statsInterval = setInterval(fetchHeaderStats, 60000);
-        fetchGdeMetrics();
-        fetchGrowthMetrics();
-        const gdeInterval = setInterval(fetchGdeMetrics, 60000);
-        const growthInterval = setInterval(fetchGrowthMetrics, 300000);
+        let statsInterval: ReturnType<typeof setInterval> | null = null;
+        let gdeInterval: ReturnType<typeof setInterval> | null = null;
+        let growthInterval: ReturnType<typeof setInterval> | null = null;
+        if (!staticMode) {
+            fetchHeaderStats();
+            statsInterval = setInterval(fetchHeaderStats, 60000);
+            fetchGdeMetrics();
+            fetchGrowthMetrics();
+            gdeInterval = setInterval(fetchGdeMetrics, 60000);
+            growthInterval = setInterval(fetchGrowthMetrics, 300000);
+        }
 
         return () => {
             clearTimeout(healthCheckTimer);
-            clearInterval(statsInterval);
-            clearInterval(gdeInterval);
-            clearInterval(growthInterval);
+            if (statsInterval) clearInterval(statsInterval);
+            if (gdeInterval) clearInterval(gdeInterval);
+            if (growthInterval) clearInterval(growthInterval);
             clearInterval(uiClock);
             window.removeEventListener('keydown', handleShortcuts);
             window.removeEventListener('pointerdown', handleActivity);
@@ -1212,12 +1244,12 @@
             {#if activeWindow === 'status'}
                 <FloatingWindow
                     windowKey="status"
-                    title="Status & Autoheal"
+                    title={staticMode ? 'Status' : 'Status & Autoheal'}
                     subtitle="Health, safety & recovery"
                     icon="monitor_heart"
                     onClose={closeActiveWindow}
                     windowActions={[{ key: 'close', label: 'Close', onClick: closeActiveWindow }]}
-                    tabs={[{ key: 'status', label: 'Status' }, { key: 'autoheal', label: 'Autoheal' }]}
+                    tabs={statusTabs}
                     initialActiveTab={statusAutohealTab}
                     bind:activeTabKey={statusAutohealTab}
                     let:activeTab

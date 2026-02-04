@@ -73,9 +73,54 @@ export type SystemLog = {
 
 export const newsFeed = writable<unknown[]>([])
 export const mapMode = writable('vector')
-export const soundEnabled = writable(true)
+const SOUND_ENABLED_KEY = 'gmp_sound_enabled'
+const AUDIO_VOLUME_KEY = 'gmp_audio_volume'
+
+const loadStoredBoolean = (key: string, fallback: boolean): boolean => {
+    if (typeof window === 'undefined') return fallback
+    try {
+        const raw = window.localStorage.getItem(key)
+        if (!raw) return fallback
+        if (raw === '1' || raw === 'true') return true
+        if (raw === '0' || raw === 'false') return false
+        return fallback
+    } catch {
+        return fallback
+    }
+}
+
+const loadStoredNumber = (key: string, fallback: number): number => {
+    if (typeof window === 'undefined') return fallback
+    try {
+        const raw = window.localStorage.getItem(key)
+        if (!raw) return fallback
+        const parsed = Number(raw)
+        return Number.isFinite(parsed) ? parsed : fallback
+    } catch {
+        return fallback
+    }
+}
+
+export const soundEnabled = writable(loadStoredBoolean(SOUND_ENABLED_KEY, true))
 export const audioEnabled = soundEnabled
-export const audioVolume = writable(0.5)
+export const audioVolume = writable(loadStoredNumber(AUDIO_VOLUME_KEY, 0.5))
+
+if (typeof window !== 'undefined') {
+    soundEnabled.subscribe((value) => {
+        try {
+            window.localStorage.setItem(SOUND_ENABLED_KEY, value ? '1' : '0')
+        } catch {
+            void 0
+        }
+    })
+    audioVolume.subscribe((value) => {
+        try {
+            window.localStorage.setItem(AUDIO_VOLUME_KEY, String(value))
+        } catch {
+            void 0
+        }
+    })
+}
 export const heatmapEnabled = writable(true)
 
 export const mapState = writable<MapState>({
