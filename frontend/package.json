@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint:guard": "node -e \"import fs from 'node:fs'; const required=['index.html','src/main.js','src/App.svelte','src/app.css','src/lib/stores.ts','src/lib/sidebarSync.ts','src/lib/components/MapContainer.svelte','vite.config.js','tailwind.config.js']; const missing=required.filter((p)=>!fs.existsSync(p)); if(missing.length){console.error('Missing required files:', missing.join(', ')); process.exit(1)}\"",
+    "lint": "npm run lint:guard"
   },
   "devDependencies": {
     "@tsconfig/svelte": "^5.0.6",
