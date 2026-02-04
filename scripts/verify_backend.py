@@ -3,7 +3,7 @@ import requests
 import json
 import datetime
 
-API_URL = "http://localhost:8002"
+API_URL = "http://localhost:8000"
 
 def check_health():
     try:

@@ -16,6 +16,9 @@ This index serves as the central point of truth for all project documentation, e
 - **[Scrapy Troubleshooting](SCRAPY_TROUBLESHOOTING.md)**: Crawler specific issues.
 
 ## 3. Planning & Strategy
+- **[Continuous Improvement Strategy](CONTINUOUS_IMPROVEMENT_STRATEGY.md)**: Closed-loop management process.
+- **[Next Iteration Plan](NEXT_ITERATION_PLAN.md)**: Specific tasks for the upcoming sprint.
+- **[Future Roadmap V1](FUTURE_ROADMAP_V1.md)**: Prioritized feature list and tech debt plan for Q2 2026.
 - **[Next Phase Recommendations](NEXT_PHASE_RECOMMENDATIONS.md)**: Future optimization plans.
 - **[Next Phase Plan (Q2)](NEXT_PHASE_PLAN.md)**: Immediate next steps.
 - **[Roadmap](ROADMAP.md)**: Long-term vision.

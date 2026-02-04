@@ -23,6 +23,8 @@ share/python-wheels/
 MANIFEST
 venv/
 .env
+.env.*
+!.env.example
 
 # Node.js
 node_modules/
@@ -33,6 +35,11 @@ yarn-error.log
 # Svelte/Vite
 .svelte-kit/
 .vercel/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+frontend/reports/
+reports/
 
 # Editor
 .vscode/

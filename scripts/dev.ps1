@@ -1,3 +1,2 @@
-# 启动开发环境
 Write-Host "Starting Development Environment..." -ForegroundColor Green
-docker-compose up --build
+docker compose -f docker-compose.yml --profile dev up --build

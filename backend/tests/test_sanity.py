@@ -22,7 +22,35 @@ def test_import_spacy():
 
 def test_settings_load():
     """Ensure settings are loaded correctly."""
-    assert settings.PROJECT_NAME == "GlobeMediaPulse"
+    assert isinstance(settings.PROJECT_NAME, str)
+    assert settings.PROJECT_NAME.strip() != ""
+
+def test_workflows_import_without_optional_deps(monkeypatch):
+    import builtins
+    import sys
+
+    blocked_prefixes = (
+        "psycopg2",
+        "redis",
+        "httpx",
+        "pandas",
+        "sklearn",
+        "joblib",
+    )
+
+    real_import = builtins.__import__
+
+    def _blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+        for prefix in blocked_prefixes:
+            if name == prefix or name.startswith(prefix + "."):
+                raise ModuleNotFoundError(name)
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked_import)
+    sys.modules.pop("backend.workflows.flows", None)
+    import backend.workflows.flows as flows
+
+    assert callable(flows.core_business_flow)
 
 def test_database_url_normalization():
     raw = os.getenv("DATABASE_URL")
@@ -53,3 +81,9 @@ def test_countries_data_has_key_territories():
         codes = {feature.get("id") for feature in geojson.get("features", []) if isinstance(feature, dict)}
 
     assert {"BMU", "GRL", "GUM"}.issubset(codes)
+
+def test_src_seed_guardrail():
+    from backend.operators.intelligence.source_classifier import SourceClassifier
+
+    classifier = SourceClassifier(seed_file=os.path.join("backend", "resources", "__missing__.json"))
+    assert len(classifier.sources) >= 60

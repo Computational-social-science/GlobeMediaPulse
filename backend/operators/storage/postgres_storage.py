@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from backend.core.database import db_manager
@@ -202,6 +203,7 @@ class PostgresStorageOperator:
         if not sources:
             return {"processed": 0}
         processed = 0
+        started_at = time.perf_counter()
         try:
             with self.get_connection() as conn:
                 if not conn:
@@ -258,7 +260,16 @@ class PostgresStorageOperator:
                     )
                     processed = len(rows)
                     conn.commit()
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            self.record_src_metric(
+                action="write",
+                status="ok",
+                latency_ms=elapsed_ms,
+                delta_count=processed,
+            )
         except Exception as e:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            self.record_src_metric(action="write", status="error", latency_ms=elapsed_ms, error_message=str(e))
             logger.error(f"Bulk upsert media sources failed: {e}")
             return {"processed": processed, "error": str(e)}
         return {"processed": processed}
@@ -541,25 +552,283 @@ class PostgresStorageOperator:
         Returns:
             Dict[str, Any]: Basic metrics like 'total_articles', 'total_sources'.
         """
+        started_at = time.perf_counter()
         try:
             with self.get_connection() as conn:
-                if not conn: return {}
+                if not conn:
+                    return {}
                 with conn.cursor() as cursor:
-                    # 1. Total Articles
                     cursor.execute("SELECT COUNT(*) FROM news_articles")
                     total_articles = cursor.fetchone()[0]
-                    
-                    # 2. Total Media Sources
                     cursor.execute("SELECT COUNT(*) FROM media_sources")
                     total_sources = cursor.fetchone()[0]
-                    
-                    return {
-                        "total_articles": total_articles,
-                        "total_sources": total_sources
-                    }
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM media_sources
+                        WHERE country_code IS NOT NULL AND country_code != 'UNK'
+                        """
+                    )
+                    effective_sources = cursor.fetchone()[0]
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            self.record_src_metric(
+                action="read",
+                status="ok",
+                latency_ms=elapsed_ms,
+                total_sources=int(total_sources or 0),
+                effective_sources=int(effective_sources or 0),
+            )
+            return {
+                "total_articles": total_articles,
+                "total_sources": total_sources,
+                "effective_sources": effective_sources
+            }
         except Exception as e:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            self.record_src_metric(action="read", status="error", latency_ms=elapsed_ms, error_message=str(e))
             logger.error(f"Error retrieving system stats: {e}")
             return {}
+
+    def get_growth_recent(self, days: int = 7) -> List[Dict[str, Any]]:
+        window_days = max(1, int(days or 7))
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return []
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        WITH days AS (
+                            SELECT date_trunc('day', NOW()) - (interval '1 day' * generate_series(0, %s)) AS day
+                        ),
+                        media_net AS (
+                            SELECT date_trunc('day', created_at) AS day, COUNT(*) AS net
+                            FROM media_sources
+                            WHERE created_at >= NOW() - interval %s
+                            GROUP BY 1
+                        ),
+                        media AS (
+                            SELECT d.day, COALESCE(m.net, 0) AS net
+                            FROM days d LEFT JOIN media_net m ON m.day = d.day
+                        ),
+                        media_cum AS (
+                            SELECT day, net, SUM(net) OVER (ORDER BY day) AS total
+                            FROM media
+                        ),
+                        cand_net AS (
+                            SELECT date_trunc('day', found_at) AS day, COUNT(*) AS net
+                            FROM candidate_sources
+                            WHERE found_at >= NOW() - interval %s
+                            GROUP BY 1
+                        ),
+                        cand AS (
+                            SELECT d.day, COALESCE(c.net, 0) AS net
+                            FROM days d LEFT JOIN cand_net c ON c.day = d.day
+                        ),
+                        cand_cum AS (
+                            SELECT day, net, SUM(net) OVER (ORDER BY day) AS total
+                            FROM cand
+                        ),
+                        art_net AS (
+                            SELECT date_trunc('day', COALESCE(scraped_at, published_at)) AS day, COUNT(*) AS net
+                            FROM news_articles
+                            WHERE COALESCE(scraped_at, published_at) >= NOW() - interval %s
+                            GROUP BY 1
+                        ),
+                        art AS (
+                            SELECT d.day, COALESCE(a.net, 0) AS net
+                            FROM days d LEFT JOIN art_net a ON a.day = d.day
+                        ),
+                        art_cum AS (
+                            SELECT day, net, SUM(net) OVER (ORDER BY day) AS total
+                            FROM art
+                        )
+                        SELECT
+                            m.day::date AS day,
+                            m.net AS media_sources_net,
+                            c.net AS candidate_sources_net,
+                            a.net AS news_articles_net,
+                            m.total AS media_sources_count,
+                            c.total AS candidate_sources_count,
+                            a.total AS news_articles_count,
+                            CASE WHEN c.total > 0 THEN c.net::float / c.total ELSE 0 END AS candidate_sources_growth_rate
+                        FROM media_cum m
+                        JOIN cand_cum c ON c.day = m.day
+                        JOIN art_cum a ON a.day = m.day
+                        ORDER BY m.day DESC
+                        """,
+                        (window_days - 1, f"{window_days} days", f"{window_days} days", f"{window_days} days"),
+                    )
+                    rows = cursor.fetchall()
+                    out: List[Dict[str, Any]] = []
+                    for row in rows:
+                        out.append(
+                            {
+                                "day": row[0].isoformat() if row[0] else None,
+                                "media_sources_net": int(row[1] or 0),
+                                "candidate_sources_net": int(row[2] or 0),
+                                "news_articles_net": int(row[3] or 0),
+                                "media_sources_count": int(row[4] or 0),
+                                "candidate_sources_count": int(row[5] or 0),
+                                "news_articles_count": int(row[6] or 0),
+                                "candidate_sources_growth_rate": float(row[7] or 0),
+                            }
+                        )
+                    return out
+        except Exception as e:
+            logger.error(f"Error retrieving growth stats: {e}")
+            return []
+
+    def record_src_metric(
+        self,
+        action: str,
+        status: str,
+        latency_ms: float | None = None,
+        error_message: str | None = None,
+        delta_count: int | None = None,
+        total_sources: int | None = None,
+        effective_sources: int | None = None,
+    ) -> None:
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS src_metrics (
+                            id SERIAL PRIMARY KEY,
+                            action TEXT NOT NULL,
+                            status TEXT NOT NULL,
+                            latency_ms DOUBLE PRECISION,
+                            error_message TEXT,
+                            delta_count INTEGER,
+                            total_sources INTEGER,
+                            effective_sources INTEGER,
+                            created_at TIMESTAMP DEFAULT NOW()
+                        )
+                        """
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO src_metrics (
+                            action, status, latency_ms, error_message, delta_count,
+                            total_sources, effective_sources, created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                        """,
+                        (
+                            action,
+                            status,
+                            latency_ms,
+                            error_message,
+                            delta_count,
+                            total_sources,
+                            effective_sources,
+                        ),
+                    )
+                    conn.commit()
+        except Exception:
+            return
+
+    def get_src_metrics_recent(self, days: int = 7, bucket: str = "hour") -> List[Dict[str, Any]]:
+        window_days = max(1, int(days or 7))
+        bucket_unit = (bucket or "hour").strip().lower()
+        if bucket_unit not in ("hour", "day"):
+            bucket_unit = "hour"
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return []
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            date_trunc(%s, created_at) AS bucket,
+                            action,
+                            COUNT(*) AS total_requests,
+                            SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_requests,
+                            SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) AS error_requests,
+                            AVG(latency_ms) AS avg_latency_ms,
+                            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_latency_ms,
+                            SUM(COALESCE(delta_count, 0)) AS delta_total
+                        FROM src_metrics
+                        WHERE created_at >= NOW() - interval %s
+                        GROUP BY 1, 2
+                        ORDER BY 1 DESC, 2 ASC
+                        """,
+                        (bucket_unit, f"{window_days} days"),
+                    )
+                    rows = cursor.fetchall()
+                    out: List[Dict[str, Any]] = []
+                    for row in rows:
+                        bucket_ts = row[0].isoformat() if row[0] else None
+                        total = int(row[2] or 0)
+                        error_count = int(row[4] or 0)
+                        qps = (float(total) / 3600.0) if bucket_unit == "hour" else (float(total) / 86400.0)
+                        error_rate = (float(error_count) / float(total)) if total else 0.0
+                        out.append(
+                            {
+                                "bucket": bucket_ts,
+                                "action": row[1],
+                                "total": total,
+                                "ok": int(row[3] or 0),
+                                "error": error_count,
+                                "qps": qps,
+                                "avg_latency_ms": float(row[5] or 0),
+                                "p95_latency_ms": float(row[6] or 0),
+                                "error_rate": error_rate,
+                                "delta_total": int(row[7] or 0),
+                                "bucket_unit": bucket_unit,
+                            }
+                        )
+                    return out
+        except Exception as e:
+            logger.error(f"Error retrieving src metrics: {e}")
+            return []
+
+    def get_src_alert(self, window_minutes: int = 30) -> Dict[str, Any]:
+        window_minutes = max(1, int(window_minutes or 30))
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return {"window_minutes": window_minutes, "status": "no_connection"}
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            COUNT(*) AS total_requests,
+                            SUM(CASE WHEN action = 'write' THEN 1 ELSE 0 END) AS write_requests,
+                            SUM(CASE WHEN action = 'write' THEN COALESCE(delta_count, 0) ELSE 0 END) AS write_delta,
+                            AVG(CASE WHEN action = 'write' THEN latency_ms END) AS write_avg_latency_ms,
+                            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) FILTER (WHERE action = 'write') AS write_p95_latency_ms,
+                            MAX(created_at) AS last_metric_at
+                        FROM src_metrics
+                        WHERE created_at >= NOW() - interval %s
+                        """,
+                        (f"{window_minutes} minutes",),
+                    )
+                    row = cursor.fetchone() or ()
+                    total_requests = int(row[0] or 0)
+                    write_requests = int(row[1] or 0)
+                    write_delta = int(row[2] or 0)
+                    write_avg = float(row[3] or 0)
+                    write_p95 = float(row[4] or 0)
+                    last_metric_at = row[5].isoformat() if row[5] else None
+                    no_change = write_delta == 0
+                    return {
+                        "window_minutes": window_minutes,
+                        "total_requests": total_requests,
+                        "write_requests": write_requests,
+                        "write_delta": write_delta,
+                        "write_avg_latency_ms": write_avg,
+                        "write_p95_latency_ms": write_p95,
+                        "last_metric_at": last_metric_at,
+                        "no_change": no_change,
+                    }
+        except Exception as e:
+            logger.error(f"Error retrieving src alert: {e}")
+            return {"window_minutes": window_minutes, "status": "error", "error": str(e)}
 
     def prune_old_articles(self, retention_hours: int = 12) -> int:
         """

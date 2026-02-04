@@ -47,7 +47,7 @@ sudo ufw allow 443/tcp # HTTPS
 
 # 4. Project Setup
 echo "[4/5] Setting up project directory..."
-PROJECT_DIR="/home/$USER/GlobeMediaPulse"
+PROJECT_DIR="$HOME/GlobeMediaPulse"
 mkdir -p "$PROJECT_DIR/data/crawler_persistence"
 mkdir -p "$PROJECT_DIR/data/logs"
 mkdir -p "$PROJECT_DIR/data/output"

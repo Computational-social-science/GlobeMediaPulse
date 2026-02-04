@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     )
     
     # Redis Configuration
-    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6380")
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     
     # Path Configuration
     # Resolve project root directory dynamically
@@ -49,6 +49,6 @@ class Settings(BaseSettings):
 
     SIMHASH_SIMILARITY_THRESHOLD: int = int(os.getenv("SIMHASH_SIMILARITY_THRESHOLD", "3"))
     
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
 
 settings = Settings()

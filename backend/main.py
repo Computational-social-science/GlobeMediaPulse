@@ -185,6 +185,16 @@ async def redis_event_listener():
 
 app = FastAPI(title="Globe Media Pulse API", lifespan=lifespan)
 
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "ok", 
+        "services": {
+            "postgres": "unknown" if db_manager._pool is None else "connected",
+            "redis": "connected"
+        }
+    }
+
 # CORS Configuration
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
 allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()] or [
@@ -234,4 +244,5 @@ def read_root() -> Dict[str, str]:
     }
 
 if __name__ == "__main__":
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8002, reload=True)
+    port = int(os.getenv("PORT", "8000") or "8000")
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=port, reload=True)

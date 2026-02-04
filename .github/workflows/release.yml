@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute version
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Run backend tests
+        env:
+          PYTHONPATH: .
+        run: |
+          mkdir -p reports
+          pytest -v backend/tests --junitxml=reports/backend-junit.xml
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Generate static frontend data
+        run: python scripts/build_frontend_data.py
+
+      - name: Build frontend
+        env:
+          VITE_BUILD_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Package artifacts
+        run: |
+          mkdir -p dist
+          cd frontend/dist
+          zip -r "../../dist/globemediapulse-frontend-${{ steps.meta.outputs.version }}.zip" .
+          cd ../..
+          cp -f reports/backend-junit.xml "dist/backend-junit-${{ steps.meta.outputs.version }}.xml"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.zip
+            dist/*.xml
+

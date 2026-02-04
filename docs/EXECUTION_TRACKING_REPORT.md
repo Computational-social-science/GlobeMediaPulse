@@ -20,7 +20,11 @@
 | **T07** | **Config** | Configure Production Secrets (GitHub) | Admin | - | - | ⏳ Pending |
 | **T08** | **Verify** | Execute First Full Deployment | DevOps | - | - | ⏳ Pending |
 | **T09** | **UX** | Implement Zero-Threshold Setup Wizard | Frontend | 2026-02-03 | 2026-02-03 | ✅ Completed |
-| **T10** | **UX** | Config Persistence & Sharing (LocalStorage) | Frontend | 2026-02-03 | 2026-02-03 | ✅ Completed |
+| **T10** | **UX** | Config Persistence (Local Only) | Frontend | 2026-02-03 | 2026-02-03 | ✅ Completed |
+| **T11** | **Refactor** | Remove Auth & Simplify Architecture | Architect | 2026-02-03 | 2026-02-03 | ✅ Completed |
+| **T12** | **DevOps** | Docker Compose Single-Machine Setup | DevOps | 2026-02-03 | 2026-02-03 | ✅ Completed |
+| **T13** | **QA** | Validation Suite & Acceptance Tests | QA | 2026-02-03 | 2026-02-03 | ✅ Completed |
+| **T14** | **Orchestration** | Remove orchestration dependency; keep workflows observable | Backend/Frontend | 2026-02-03 | 2026-02-04 | ✅ Completed |
 
 ---
 
@@ -72,3 +76,15 @@
 - **Infrastructure:** Provisioning scripts ready.
 
 **Conclusion:** The technical foundation is 100% complete. Operational readiness waits only on secret configuration and first run execution.
+
+---
+
+## 5. Workflow Transparency Metrics (Before vs After)
+
+| Dimension | Before (Legacy Orchestrator) | After (Native Workflows) |
+| :--- | :--- | :--- |
+| Runtime dependency | External orchestrator server/worker + UI components | No orchestrator dependency in backend/frontend |
+| Operator visibility | In-app widget + external API | Backend APIs: `/system/workflows/*` + existing system logs |
+| Manual trigger | External flow run | `POST /system/workflows/run` (guarded by `SYNC_TOKEN`) |
+| Query runs/logs | External API/websocket | `GET /system/workflows/snapshot` |
+| CI/Local verification | Mixed (orchestrator availability-dependent) | `pytest` + `npm run lint` + `npm run typecheck` |

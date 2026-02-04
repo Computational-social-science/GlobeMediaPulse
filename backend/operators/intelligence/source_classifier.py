@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import ast
+import re
 from typing import Dict, Optional, List
 from pathlib import Path
 from urllib.parse import urlparse
@@ -90,27 +92,90 @@ class SourceClassifier:
         except Exception as e:
             logger.warning(f"Failed to load seeds from DB ({e}). Falling back to static file.")
 
-        # 2. Fallback to JSON File (Bootstrap/Fail-safe)
-        if not self.seed_file.exists():
-            logger.warning(f"Media seed file not found at {self.seed_file}. Classification capabilities will be limited.")
+        loaded = self._load_seeds_from_json_file()
+        if loaded >= settings.SEED_QUEUE_MIN:
             return
+
+        loaded2 = self._load_seeds_from_seed_script()
+        if loaded2:
+            logger.info(f"Loaded {loaded2} media seeds from seed_media_sources.py fallback.")
+            return
+
+        logger.warning("No media seeds loaded. Classification capabilities will be limited.")
+
+    def _load_seeds_from_json_file(self) -> int:
+        if not self.seed_file.exists():
+            return 0
 
         try:
             with open(self.seed_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                
+            loaded = 0
             for src_data in data.get("sources", []):
                 try:
                     source = MediaSource(**src_data)
                     # Index by lower-case domain for case-insensitive O(1) lookup
                     self.sources[source.domain.lower()] = source
+                    loaded += 1
                 except Exception as e:
                     logger.error(f"Failed to parse source entry: {src_data}, error: {e}")
             
-            logger.info(f"Loaded {len(self.sources)} media seeds from JSON file {self.seed_file}")
+            if loaded:
+                logger.info(f"Loaded {loaded} media seeds from JSON file {self.seed_file}")
+            return loaded
             
         except Exception as e:
             logger.error(f"Failed to load media seeds from file: {e}")
+            return 0
+
+    def _load_seeds_from_seed_script(self) -> int:
+        seed_py = Path(settings.BASE_DIR) / "backend" / "scripts" / "seed_media_sources.py"
+        if not seed_py.exists():
+            return 0
+        try:
+            text = seed_py.read_text(encoding="utf-8")
+            m = re.search(
+                r"SEED_DATA\s*=\s*(\[.*?\n\])\s*\n\s*def seed_media_sources",
+                text,
+                re.S,
+            )
+            if not m:
+                return 0
+            raw = ast.literal_eval(m.group(1))
+            if not isinstance(raw, list):
+                return 0
+            loaded = 0
+            seen: set[str] = set()
+            for src in raw:
+                if not isinstance(src, dict):
+                    continue
+                domain = src.get("domain")
+                name = src.get("name")
+                if not domain or not name:
+                    continue
+                domain = str(domain).lower().strip()
+                if not domain or domain in seen:
+                    continue
+                seen.add(domain)
+                payload = {
+                    "domain": domain,
+                    "name": str(name),
+                    "tier": src.get("tier") or MediaTier.UNKNOWN.value,
+                    "country": src.get("country_code") or src.get("country") or "UNK",
+                    "country_name": src.get("country_name"),
+                    "type": src.get("type"),
+                    "language": src.get("language"),
+                }
+                try:
+                    source = MediaSource(**payload)
+                    self.sources[source.domain.lower()] = source
+                    loaded += 1
+                except Exception as e:
+                    logger.error(f"Failed to parse seed script source {domain}: {e}")
+            return loaded
+        except Exception as e:
+            logger.error(f"Failed to load media seeds from seed script: {e}")
+            return 0
 
     def classify(self, url: str) -> Dict[str, Optional[str]]:
         """

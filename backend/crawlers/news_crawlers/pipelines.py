@@ -30,7 +30,7 @@ from backend.operators.intelligence.source_classifier import source_classifier
 from backend.operators.security.ethical_firewall import ethical_firewall
 from backend.operators.intelligence.entity_aligner import entity_aligner
 # Narrative Analysis removed
-from news_crawlers.items import CandidateSourceItem, SourceUpdateItem
+from .items import CandidateSourceItem, SourceUpdateItem
 from scrapy.exceptions import DropItem
 
 # logger = logging.getLogger(__name__) # Moved up
@@ -69,7 +69,7 @@ class EntityAlignmentPipeline:
     
     Research Motivation:
         - Maps entities to Wikidata QIDs for global aggregation.
-        - [NEW] Vectorizes entity mentions to align cross-lingual narratives (e.g., 'Biden' vs '拜登').
+        - [NEW] Vectorizes entity mentions to align cross-lingual narratives (e.g., different script variants of the same entity).
     """
     def __init__(self):
         self.model = None

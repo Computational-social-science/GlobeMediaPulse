@@ -8,7 +8,7 @@ from backend.operators.storage import storage_operator
 logger = logging.getLogger(__name__)
 
 class CleanupPipeline:
-    """
+    r"""
     Pipeline for resource hygiene and storage stability.
 
     Research motivation: bound storage drift by enforcing a cleanup cadence that keeps
@@ -18,7 +18,7 @@ class CleanupPipeline:
         self.storage = storage_operator
 
     def run(self, dry_run=False):
-        """
+        r"""
         Execute the cleanup procedure.
 
         Tasks:
@@ -34,7 +34,7 @@ class CleanupPipeline:
         logger.info("Cleanup Pipeline complete.")
 
     def _cleanup_files(self, dry_run):
-        """
+        r"""
         Remove transient artifacts and oversized logs.
 
         A log is eligible for removal when its size exceeds $L_{\max}=50\ \mathrm{MB}$.
@@ -79,7 +79,7 @@ class CleanupPipeline:
                 logger.error(f"Failed to delete {fpath}: {e}")
 
     def _prune_database(self, dry_run):
-        """
+        r"""
         Prune Tier-2 articles older than the retention window.
 
         The pruning window is $T=12\ \mathrm{hours}$, enforcing an age constraint

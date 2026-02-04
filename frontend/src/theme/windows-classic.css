@@ -1,0 +1,7 @@
+:root {
+  --color-primary-100: #dbeafe;
+  --color-primary-700: #1d4ed8;
+  --sidebar-active-opacity: 12%;
+  --sidebar-hover-opacity: 6%;
+  --sidebar-transition: 200ms ease-out;
+}

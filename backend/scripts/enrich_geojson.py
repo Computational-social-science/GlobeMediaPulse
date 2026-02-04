@@ -9,7 +9,7 @@ def enrich_geojson():
     """
     Enriches backend/data/countries.geo.json with:
     1. 'aliases': List of alternative names (e.g. 'United States', 'US', 'America').
-    2. 'name_zh': Chinese name (e.g. '美国').
+    2. 'name_zh': Localized name in Simplified Chinese.
     """
     
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

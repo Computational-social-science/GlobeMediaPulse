@@ -4,26 +4,32 @@ import time
 import argparse
 
 def smoke_test(url, retries=5, delay=5):
-    """
-    Verifies that the backend API is reachable and returns healthy status.
-    """
     endpoint = f"{url.rstrip('/')}/health"
+    full_endpoint = f"{url.rstrip('/')}/health/full"
     print(f"Testing connectivity to: {endpoint}")
+    print(f"Testing connectivity to: {full_endpoint}")
 
     for i in range(retries):
         try:
-            # Simple Health Check (assuming FastAPI /health or / endpoint)
-            # Adjust endpoint as per actual API implementation
             response = requests.get(endpoint, timeout=5)
-            
-            if response.status_code == 200:
+            if response.status_code != 200:
+                print(f"⚠️ [Attempt {i+1}] Warning: Status code {response.status_code}")
+                raise requests.exceptions.RequestException("health endpoint error")
+            full_response = requests.get(full_endpoint, timeout=5)
+            if full_response.status_code != 200:
+                print(f"⚠️ [Attempt {i+1}] Warning: Status code {full_response.status_code}")
+                raise requests.exceptions.RequestException("health full endpoint error")
+            data = full_response.json()
+            status = str(data.get("status") or "").lower()
+            if status in ("ok", "healthy", "online", "pass"):
                 print(f"✅ [Attempt {i+1}] Success: Service is healthy.")
                 return True
-            else:
-                print(f"⚠️ [Attempt {i+1}] Warning: Status code {response.status_code}")
+            print(f"⚠️ [Attempt {i+1}] Warning: Full health status {status or 'unknown'}")
         except requests.exceptions.RequestException as e:
             print(f"❌ [Attempt {i+1}] Connection failed: {e}")
-        
+        except ValueError:
+            print(f"❌ [Attempt {i+1}] Invalid JSON from full health.")
+
         if i < retries - 1:
             print(f"Retrying in {delay} seconds...")
             time.sleep(delay)

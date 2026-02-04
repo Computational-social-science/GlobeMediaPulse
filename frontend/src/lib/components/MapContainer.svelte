@@ -2,35 +2,22 @@
     import { onMount, onDestroy, getContext } from 'svelte';
     import { get } from 'svelte/store';
     import { SvelteMap } from 'svelte/reactivity';
-    import { mapMode, newsEvents, systemLogs, mapCommand, mapState, mapIdleTimeout, mediaProfileStats } from '@stores';
+    import {
+        mapMode,
+        newsEvents,
+        systemLogs,
+        mapCommand,
+        mapState,
+        mapIdleTimeout,
+        mediaProfileStats
+    } from '@stores';
+    import type { NewsEvent, SystemLog } from '@stores';
     import { DATA } from '@lib/data.js';
     import maplibregl from 'maplibre-gl';
 
     type SoundManager = {
         init: () => void;
         playDataChirp: () => void;
-    };
-    type NewsItem = {
-        [key: string]: unknown;
-        country_code?: string;
-        country?: string;
-        countryCode?: string;
-        country_name?: string;
-        headline?: string;
-        title?: string;
-        has_error?: boolean;
-        error_details?: { word?: string; suggestion?: string } | null;
-        errors?: Array<{ word?: string; suggestion?: string }>;
-        timestamp?: number;
-        id?: string | number;
-        coordinates?: unknown;
-        lng?: number;
-        lat?: number;
-        source_domain?: string;
-        source_domain_norm?: string;
-        source_name?: string;
-        logo_url?: string;
-        tier?: string;
     };
     type GeoGeometry = { type: string; coordinates: unknown };
     type GeoFeature = {
@@ -52,10 +39,6 @@
         features: GeoFeature[];
     };
     type SpellAtlasMap = maplibregl.Map & { __spellatlasEventsBound?: boolean };
-    type SystemLog = {
-        sub_type?: string;
-        data?: { result?: string; domain?: string; method?: string };
-    };
 
     const soundManager =
         getContext<SoundManager>('soundManager') || {
@@ -373,7 +356,7 @@
         return host || null;
     }
 
-    function computeLocalizationSignal(article: NewsItem, meta: LngLatMeta | null): LocalizationSignal {
+    function computeLocalizationSignal(article: NewsEvent, meta: LngLatMeta | null): LocalizationSignal {
         const rawConfidence = String(
             (article as Record<string, unknown>).country_confidence ??
                 (article as Record<string, unknown>).confidence ??
@@ -395,7 +378,7 @@
         return { level, score, label, accent };
     }
 
-    function createNewsCardElement(article: NewsItem, meta: LngLatMeta | null = null) {
+    function createNewsCardElement(article: NewsEvent, meta: LngLatMeta | null = null) {
         const countryCode = article.country_code || article.country || 'UNK';
         const countryData = getCountryByCode(countryCode);
         const countryName = countryData?.name || countryCode;
@@ -553,6 +536,8 @@
 
     let scanMarker: maplibregl.Marker | null = null;
     let serverMarker: maplibregl.Marker | null = null;
+    let newsCardMarker: maplibregl.Marker | null = null;
+    let newsCardRemoveTimer: ReturnType<typeof setTimeout> | null = null;
     const countryPolygonsByCode: SvelteMap<string, Array<Array<[number, number]>>> = new SvelteMap();
 
     /**
@@ -660,7 +645,7 @@
     function resolveApiBase(): string {
         if (isStaticMode()) return '';
         const env = getViteEnv();
-        return env.VITE_API_URL || env.VITE_API_BASE_URL || (window.location.hostname === 'localhost' ? 'http://localhost:8002' : '');
+        return env.VITE_API_URL || env.VITE_API_BASE_URL || (window.location.hostname === 'localhost' ? 'http://localhost:8000' : '');
     }
 
     onMount(async () => {
@@ -692,13 +677,13 @@
     let lastEventTime = 0;
     const EVENT_THROTTLE_MS = 200; // Limit to 5 events per second
 
-    function getItemCountryCode(article: NewsItem): string | null {
+    function getItemCountryCode(article: NewsEvent): string | null {
         const raw = article?.country_code || article?.country || article?.countryCode;
         if (!raw) return null;
         return String(raw).toUpperCase();
     }
 
-    function handleNewsEvent(article: NewsItem) {
+    function handleNewsEvent(article: NewsEvent) {
         // Logic Linkage: Even if health check failed, if we receive WS events, we are effectively online.
         // if ($systemStatus === 'OFFLINE') return; // DISABLED for robustness
 
@@ -738,6 +723,26 @@
         const resolved = resolveLngLatWithMeta(article);
         if (!resolved.position) return;
         updateVisualEffects(resolved.position, article, resolved.meta);
+
+        if (newsCardRemoveTimer) {
+            clearTimeout(newsCardRemoveTimer);
+            newsCardRemoveTimer = null;
+        }
+        if (newsCardMarker) {
+            newsCardMarker.remove();
+            newsCardMarker = null;
+        }
+        const mapRef = map;
+        if (!mapRef) return;
+        const cardEl = createNewsCardElement(article, resolved.meta);
+        newsCardMarker = new maplibregl.Marker({ element: cardEl, anchor: 'bottom', offset: [0, -12] })
+            .setLngLat(resolved.position)
+            .addTo(mapRef);
+        newsCardRemoveTimer = setTimeout(() => {
+            newsCardMarker?.remove();
+            newsCardMarker = null;
+            newsCardRemoveTimer = null;
+        }, 8000);
     }
 
     function handleLogEvent(log: SystemLog) {
@@ -853,8 +858,8 @@
         if (shouldExposeMap) {
             type SpellAtlasWindow = Window & {
                 map?: maplibregl.Map;
-                __createNewsCardElement?: (article: NewsItem) => HTMLElement;
-                __emitNewsEvent?: (article: NewsItem) => void;
+                __createNewsCardElement?: (article: NewsEvent) => HTMLElement;
+                __emitNewsEvent?: (article: NewsEvent) => void;
             };
             const w = window as SpellAtlasWindow;
             w.map = mapInstance;
@@ -908,6 +913,8 @@
         if (map) map.remove();
         if (scanMarker) scanMarker.remove();
         if (serverMarker) serverMarker.remove();
+        if (newsCardMarker) newsCardMarker.remove();
+        if (newsCardRemoveTimer) clearTimeout(newsCardRemoveTimer);
     });
 
     /**
@@ -1161,7 +1168,7 @@
      * Validates against country boundaries and falls back to country center.
      * @param {any} item - The data item.
      */
-    function resolveLngLatWithMeta(item: NewsItem): { position: [number, number] | null; meta: LngLatMeta | null } {
+    function resolveLngLatWithMeta(item: NewsEvent): { position: [number, number] | null; meta: LngLatMeta | null } {
         const countryCode = getItemCountryCode(item);
         const fromCoordinates = toLngLat(item?.coordinates);
         const fromLatLng = fromCoordinates ? null : toLngLat({ lng: item?.lng, lat: item?.lat });
@@ -1215,7 +1222,7 @@
      * @param {any} item
      * @param {any} isError
      */
-    function updateVisualEffects(position: [number, number], item: NewsItem, meta: LngLatMeta | null) {
+    function updateVisualEffects(position: [number, number], item: NewsEvent, meta: LngLatMeta | null) {
         if (!map) return;
         const mapRef = map;
         const signal = computeLocalizationSignal(item, meta);

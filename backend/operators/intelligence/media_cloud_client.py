@@ -1,4 +1,5 @@
 import logging
+import time
 import mediacloud.api
 from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
@@ -119,6 +120,7 @@ class MediaCloudIntegrator:
         db: Session = SessionLocal()
         count_new = 0
         count_updated = 0
+        started_at = time.perf_counter()
         
         # DEBUG: Print structure of first source
         if sources:
@@ -167,12 +169,36 @@ class MediaCloudIntegrator:
                     count_new += 1
             
             db.commit()
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            try:
+                from backend.operators.storage import storage_operator
+
+                storage_operator.record_src_metric(
+                    action="write",
+                    status="ok",
+                    latency_ms=elapsed_ms,
+                    delta_count=int(count_new or 0),
+                )
+            except Exception:
+                pass
             logger.info(f"Media Cloud Sync: {count_new} new, {count_updated} updated.")
             return count_new, count_updated
             
         except Exception as e:
             logger.error(f"Error syncing to DB: {e}")
             db.rollback()
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            try:
+                from backend.operators.storage import storage_operator
+
+                storage_operator.record_src_metric(
+                    action="write",
+                    status="error",
+                    latency_ms=elapsed_ms,
+                    error_message=str(e),
+                )
+            except Exception:
+                pass
             return 0, 0
         finally:
             db.close()

@@ -40,6 +40,42 @@ class ProcessManager:
         self._initialized = True
         logger.info("ProcessManager initialized.")
 
+    def get_crawler_alerts(self) -> dict:
+        stderr_lines = list(self._crawler_stderr_tail)
+        stdout_lines = list(self._crawler_stdout_tail)
+        combined = stderr_lines + stdout_lines
+
+        def _count_substrings(lines, needles):
+            c = 0
+            for line in lines:
+                for n in needles:
+                    if n in line:
+                        c += 1
+                        break
+            return c
+
+        has_traceback = any("Traceback (most recent call last)" in line for line in stderr_lines)
+        rate_limit_hits = _count_substrings(combined, ["Rate Limited (429)", " 429 "])
+        forbidden_hits = _count_substrings(combined, ["Access Forbidden (403)", " 403 "])
+        network_error_hits = _count_substrings(
+            combined,
+            [
+                "DNSLookupError",
+                "TCPTimedOutError",
+                "TimeoutError",
+                "ResponseNeverReceived",
+                "ConnectionLost",
+                "ConnectionRefusedError",
+            ],
+        )
+
+        return {
+            "has_traceback": has_traceback,
+            "rate_limit_hits": rate_limit_hits,
+            "forbidden_hits": forbidden_hits,
+            "network_error_hits": network_error_hits,
+        }
+
     def start_crawler(self):
         """Starts the Scrapy crawler process."""
         if self.is_crawler_running():
@@ -47,18 +83,11 @@ class ProcessManager:
             return
 
         try:
-            # Path to the directory containing scrapy.cfg or the module root
-            # Assuming backend/crawlers/news_crawlers is the Scrapy project root
-            cwd = os.path.join(os.getcwd(), 'backend', 'crawlers', 'news_crawlers')
-            
-            # If scrapy.cfg is not there, we might need to set PYTHONPATH
+            project_root = os.getcwd()
+            crawlers_root = os.path.join(project_root, "backend", "crawlers")
             env = os.environ.copy()
-            # Add project root and backend/crawlers to PYTHONPATH
-            # Project root: for 'backend' imports
-            # backend/crawlers: for 'news_crawlers' imports (as Scrapy expects modules to be importable)
-            crawlers_path = os.path.join(os.getcwd(), 'backend', 'crawlers')
-            env['PYTHONPATH'] = f"{os.getcwd()}{os.pathsep}{crawlers_path}"
-            env['SCRAPY_SETTINGS_MODULE'] = 'backend.crawlers.news_crawlers.settings'
+            env["PYTHONPATH"] = f"{project_root}{os.pathsep}{crawlers_root}"
+            env["SCRAPY_SETTINGS_MODULE"] = "news_crawlers.settings"
 
             # Command: scrapy crawl universal_news
             # Note: We use 'scrapy' from the same environment as the python interpreter
@@ -69,7 +98,7 @@ class ProcessManager:
             
             self.crawler_process = subprocess.Popen(
                 cmd,
-                cwd=os.getcwd(), # Run from project root so python path works for imports
+                cwd=crawlers_root,
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, # We might want to capture this for the log viewer
@@ -161,6 +190,7 @@ class ProcessManager:
             "last_exit_code": self._crawler_last_exit_code,
             "last_exit_at": self._crawler_last_exit_at,
             "last_spawn_error": self._crawler_last_spawn_error,
+            "alerts": self.get_crawler_alerts(),
             "stderr_tail": list(self._crawler_stderr_tail),
             "stdout_tail": list(self._crawler_stdout_tail),
         }

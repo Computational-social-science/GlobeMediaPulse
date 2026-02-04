@@ -3,7 +3,7 @@ import time
 import sys
 import os
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8002").rstrip("/")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
 API_BASE_URL = os.getenv("API_BASE_URL", "").strip().rstrip("/") or f"{BACKEND_URL}/api"
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 TIMEOUT_S = float(os.getenv("VERIFY_TIMEOUT_S", "5") or "5")

@@ -49,12 +49,12 @@ def log(status, message):
 
 def check_port(host, port, service_name):
     # Try HTTP check first for web ports
-    if port in [8002, 5173, 5174]:
+    if port in [8000, 5173, 4173]:
         import urllib.request
         try:
             url = f"http://{host}:{port}/"
             # Special case for backend health endpoint if needed, but root is fine
-            if port == 8002: url = f"http://{host}:{port}/health" # use health endpoint
+            if port == 8000: url = f"http://{host}:{port}/health/full" # use health endpoint
             
             with urllib.request.urlopen(url, timeout=2) as response:
                 if response.status == 200 or response.status == 404: # 404 means server is up
@@ -213,7 +213,7 @@ def main():
     
     log("INFO", "Checking Active Ports...")
     # Check if backend is running
-    backend_up = check_port("localhost", 8002, "Backend API")
+    backend_up = check_port("localhost", 8000, "Backend API")
     current_step += 1
     print_progress(current_step, total_steps, prefix='Progress:', suffix='Backend Checked', length=30)
     

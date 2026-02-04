@@ -3,12 +3,15 @@ name: CI Pipeline
 on:
   push:
     branches: [ "main", "dev" ]
+    tags:
+      - "v*"
   pull_request:
     branches: [ "main" ]
 
 jobs:
   test-backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     
     services:
       postgres:
@@ -31,7 +34,7 @@ jobs:
           - 6379:6379
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Guardrail (zero-cost): forbid Fly.io references
       run: |
@@ -40,10 +43,16 @@ jobs:
           exit 1
         fi
     
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
       with:
-        python-version: "3.10"
+        python-version: "3.11"
+        cache: "pip"
+        cache-dependency-path: backend/requirements.txt
+
+    - name: TRAE rules scan (P0)
+      run: |
+        python scripts/trae_rules_scan.py --root .
         
     - name: Install dependencies
       run: |
@@ -57,4 +66,62 @@ jobs:
         REDIS_URL: redis://localhost:6379
         PYTHONPATH: .
       run: |
-        pytest backend/tests/
+        mkdir -p reports
+        pytest backend/tests/ -v --junitxml=reports/backend-junit.xml
+
+    - name: Upload backend test reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: backend-test-reports
+        path: |
+          reports/*.xml
+
+  test-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Lint
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Typecheck
+        run: |
+          cd frontend
+          npm run typecheck
+
+      - name: Unit tests
+        run: |
+          cd frontend
+          npx vitest run
+
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [test-backend, test-frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker build (backend)
+        run: docker build -f backend/Dockerfile -t globemediapulse-backend:ci .
+
+      - name: Docker build (crawler)
+        run: docker build -f backend/Dockerfile.crawler -t globemediapulse-crawler:ci .
+
+      - name: Docker build (frontend)
+        run: docker build -f frontend/Dockerfile -t globemediapulse-frontend:ci frontend

@@ -7,6 +7,8 @@ import requests
 import subprocess
 import shutil
 import datetime
+import tempfile
+import time
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from sqlalchemy import create_engine, text
@@ -79,6 +81,37 @@ def _run(cmd: list[str], cwd: str | None = None, env: dict[str, str] | None = No
         raise click.ClickException(f"Command failed ({p.returncode}): {rendered}")
     return int(p.returncode)
 
+def _run_capture(cmd: list[str], cwd: str | None = None, env: dict[str, str] | None = None, dry_run: bool = False) -> tuple[int, str, str]:
+    rendered = " ".join(cmd)
+    click.echo(f"$ {rendered}")
+    if dry_run:
+        return 0, "", ""
+    resolved_cmd = list(cmd)
+    if os.name == "nt" and resolved_cmd:
+        exe = resolved_cmd[0]
+        if not shutil.which(exe):
+            for ext in (".cmd", ".exe", ".bat"):
+                candidate = shutil.which(f"{exe}{ext}")
+                if candidate:
+                    resolved_cmd[0] = candidate
+                    break
+    try:
+        p = subprocess.run(resolved_cmd, cwd=cwd, env=env, capture_output=True, text=True, check=False)
+        return int(p.returncode), (p.stdout or ""), (p.stderr or "")
+    except FileNotFoundError:
+        if os.name != "nt":
+            raise
+        p = subprocess.run(
+            subprocess.list2cmdline(resolved_cmd),
+            cwd=cwd,
+            env=env,
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return int(p.returncode), (p.stdout or ""), (p.stderr or "")
+
 def _git_has_changes(dry_run: bool = False) -> bool:
     if dry_run:
         return True
@@ -86,6 +119,89 @@ def _git_has_changes(dry_run: bool = False) -> bool:
     if p.returncode != 0:
         raise click.ClickException("git status failed; ensure git is installed and this is a git repo.")
     return bool((p.stdout or "").strip())
+
+def _git_current_branch(cwd: str, dry_run: bool = False) -> str:
+    code, out, err = _run_capture(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd, dry_run=dry_run)
+    if code != 0:
+        raise click.ClickException(f"git rev-parse failed: {err.strip()}")
+    branch = (out or "").strip()
+    if not branch or branch == "HEAD":
+        raise click.ClickException("Cannot determine current git branch.")
+    return branch
+
+def _acquire_sync_lock(lock_name: str, stale_after_s: int = 7200) -> tuple[int, str]:
+    lock_path = os.path.join(tempfile.gettempdir(), lock_name)
+    now = time.time()
+    try:
+        st = os.stat(lock_path)
+        age = now - float(getattr(st, "st_mtime", now))
+        if age > float(stale_after_s):
+            try:
+                os.remove(lock_path)
+            except Exception:
+                pass
+    except FileNotFoundError:
+        pass
+
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        os.write(fd, str(os.getpid()).encode("utf-8"))
+        return fd, lock_path
+    except FileExistsError:
+        raise click.ClickException(f"Sync lock is held: {lock_path}")
+
+def _release_sync_lock(fd: int, lock_path: str) -> None:
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+    try:
+        os.remove(lock_path)
+    except Exception:
+        pass
+
+def _git_integrate_remote(repo_root: str, remote: str, branch: str, conflict_strategy: str, dry_run: bool = False) -> None:
+    _run(["git", "checkout", branch], cwd=repo_root, dry_run=dry_run)
+    _run(["git", "fetch", remote, branch, "--prune"], cwd=repo_root, check=False, dry_run=dry_run)
+
+    code, _, err = _run_capture(["git", "merge", "--ff-only", f"{remote}/{branch}"], cwd=repo_root, dry_run=dry_run)
+    if code == 0:
+        return
+
+    code, _, err2 = _run_capture(["git", "rebase", f"{remote}/{branch}"], cwd=repo_root, dry_run=dry_run)
+    if code == 0:
+        return
+
+    _run(["git", "rebase", "--abort"], cwd=repo_root, check=False, dry_run=dry_run)
+    if conflict_strategy in ("ours", "theirs"):
+        merge_code, _, merge_err = _run_capture(
+            ["git", "merge", f"{remote}/{branch}", "-X", conflict_strategy],
+            cwd=repo_root,
+            dry_run=dry_run,
+        )
+        if merge_code == 0:
+            return
+        raise click.ClickException(f"git merge failed: {merge_err.strip()}")
+
+    raise click.ClickException(f"git rebase failed: {err2.strip() or err.strip()}")
+
+def _git_push_with_retries(repo_root: str, remote: str, branch: str, conflict_strategy: str, max_attempts: int, dry_run: bool = False) -> None:
+    for attempt in range(1, int(max_attempts) + 1):
+        code, out, err = _run_capture(["git", "push", remote, branch], cwd=repo_root, dry_run=dry_run)
+        if code == 0:
+            return
+
+        msg = (err or out or "").lower()
+        if any(s in msg for s in ("non-fast-forward", "fetch first", "rejected", "remote contains work")):
+            _git_integrate_remote(repo_root=repo_root, remote=remote, branch=branch, conflict_strategy=conflict_strategy, dry_run=dry_run)
+            continue
+
+        if attempt < int(max_attempts):
+            backoff_s = min(30.0, float(2 ** (attempt - 1)))
+            time.sleep(backoff_s)
+            continue
+
+        raise click.ClickException(f"git push failed: {(err or out).strip()}")
 
 def _docker_compose_cmd() -> list[str]:
     p = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True, check=False)
@@ -129,7 +245,7 @@ def health_check():
     click.echo("System is HEALTHY.")
 
 @cli.command(name="local-verify")
-@click.option("--backend-url", default=lambda: os.getenv("BACKEND_URL", "http://localhost:8002"), show_default=True)
+@click.option("--backend-url", default=lambda: os.getenv("BACKEND_URL", "http://localhost:8000"), show_default=True)
 @click.option("--frontend-url", default=lambda: os.getenv("FRONTEND_URL", "http://localhost:5173"), show_default=True)
 @click.option("--env-check/--no-env-check", default=True, show_default=True)
 @click.option("--db-check/--no-db-check", default=True, show_default=True)
@@ -137,7 +253,7 @@ def health_check():
 def local_verify(backend_url: str, frontend_url: str, env_check: bool, db_check: bool, verify_crawler: bool):
     repo_root = os.getcwd()
     env = dict(os.environ)
-    env["BACKEND_URL"] = (backend_url or "").rstrip("/") or "http://localhost:8002"
+    env["BACKEND_URL"] = (backend_url or "").rstrip("/") or "http://localhost:8000"
     env["FRONTEND_URL"] = (frontend_url or "").rstrip("/") or "http://localhost:5173"
     env["VERIFY_REQUIRE_CRAWLER"] = "1" if verify_crawler else "0"
 
@@ -579,6 +695,8 @@ def remote_status(remote_api: str, timeout: int):
 @click.option("--git-push/--no-git-push", default=False, show_default=True)
 @click.option("--sync-data/--no-sync-data", default=False, show_default=True)
 @click.option("--branch", default="", show_default=False)
+@click.option("--conflict-strategy", type=click.Choice(["ours", "theirs", "manual"]), default="ours", show_default=True)
+@click.option("--push-retries", default=3, show_default=True, type=int)
 @click.option("--message", default="", show_default=False)
 @click.option("--dry-run", is_flag=True, default=False)
 def sync_all(
@@ -591,11 +709,52 @@ def sync_all(
     git_push: bool,
     sync_data: bool,
     branch: str,
+    conflict_strategy: str,
+    push_retries: int,
     message: str,
     dry_run: bool,
 ):
     repo_root = os.getcwd()
     remote_api = (remote_api or "").rstrip("/")
+
+    if do_github:
+        lock_fd = None
+        lock_path = ""
+        try:
+            lock_fd, lock_path = _acquire_sync_lock("globemediapulse_sync.lock")
+        except Exception:
+            raise
+
+        try:
+            _run(["git", "rev-parse", "--is-inside-work-tree"], cwd=repo_root, dry_run=dry_run)
+            _run(["git", "fetch", "--all", "--prune"], cwd=repo_root, check=False, dry_run=dry_run)
+            active_branch = (branch or _git_current_branch(repo_root, dry_run=dry_run)).strip()
+            _git_integrate_remote(
+                repo_root=repo_root,
+                remote="origin",
+                branch=active_branch,
+                conflict_strategy=conflict_strategy,
+                dry_run=dry_run,
+            )
+            if git_commit:
+                if not message:
+                    today = datetime.date.today().isoformat()
+                    message = f"sync: {today}"
+                if _git_has_changes(dry_run=dry_run):
+                    _run(["git", "add", "-A"], cwd=repo_root, dry_run=dry_run)
+                    _run(["git", "commit", "-m", message], cwd=repo_root, check=False, dry_run=dry_run)
+            if git_push:
+                _git_push_with_retries(
+                    repo_root=repo_root,
+                    remote="origin",
+                    branch=active_branch,
+                    conflict_strategy=conflict_strategy,
+                    max_attempts=push_retries,
+                    dry_run=dry_run,
+                )
+        finally:
+            if lock_fd is not None and lock_path:
+                _release_sync_lock(lock_fd, lock_path)
 
     if run_tests:
         _run([sys.executable, "-m", "pytest", "backend\\tests", "-q"], cwd=repo_root, dry_run=dry_run)
@@ -608,21 +767,31 @@ def sync_all(
         dc = _docker_compose_cmd()
         _run([*dc, "up", "-d", "--build"], cwd=repo_root, dry_run=dry_run)
 
-    if do_github:
-        _run(["git", "rev-parse", "--is-inside-work-tree"], cwd=repo_root, dry_run=dry_run)
-        _run(["git", "fetch", "--all", "--prune"], cwd=repo_root, check=False, dry_run=dry_run)
-        if git_commit:
-            if not message:
-                today = datetime.date.today().isoformat()
-                message = f"sync: {today}"
-            if _git_has_changes(dry_run=dry_run):
-                _run(["git", "add", "-A"], cwd=repo_root, dry_run=dry_run)
-                _run(["git", "commit", "-m", message], cwd=repo_root, check=False, dry_run=dry_run)
-        if git_push:
-            if branch:
-                _run(["git", "push", "-u", "origin", branch], cwd=repo_root, dry_run=dry_run)
-            else:
-                _run(["git", "push"], cwd=repo_root, dry_run=dry_run)
+    if sync_data:
+        if not remote_api:
+            raise click.ClickException("Missing remote API base URL (set REMOTE_API_URL or pass --remote-api).")
+        if not sync_token:
+            raise click.ClickException("Missing SYNC_TOKEN (set env var or pass --sync-token).")
+        if (settings.SOT_ROLE or "").strip().lower() == "source":
+            sync_to_remote(
+                remote_api=remote_api,
+                token=sync_token,
+                include_candidates=True,
+                candidates_limit=5000,
+                batch_size=2000,
+                timeout=30,
+                force=False,
+            )
+        else:
+            sync_from_remote(
+                remote_api=remote_api,
+                token=sync_token,
+                tiers="Tier-0,Tier-1",
+                limit=0,
+                include_candidates=False,
+                candidates_limit=5000,
+                timeout=30,
+            )
 
 if __name__ == "__main__":
     cli()

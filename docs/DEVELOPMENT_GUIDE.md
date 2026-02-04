@@ -40,6 +40,14 @@ docker-compose up -d
 # Logs: docker-compose logs -f
 ```
 
+### 2.4 Workflow Operations
+
+Use backend endpoints (see Swagger at `/docs`):
+
+- List workflows: `GET /system/workflows/list`
+- Run workflow: `POST /system/workflows/run` (requires `SYNC_TOKEN` header)
+- Query runs/logs: `GET /system/workflows/snapshot`
+
 ---
 
 ## 3. Local-to-Remote Tunneling (Cloudflare Tunnel)

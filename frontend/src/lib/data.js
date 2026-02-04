@@ -2202,9 +2202,7 @@ export const DATA = {
             "tier": "Tier-0",
             "country_code": "GBR",
             "language": "en",
-            "tags": [
-                "agency"
-            ],
+            "tags": [],
             "logo_url": null
         },
         {
@@ -2213,9 +2211,7 @@ export const DATA = {
             "tier": "Tier-0",
             "country_code": "USA",
             "language": "en",
-            "tags": [
-                "agency"
-            ],
+            "tags": [],
             "logo_url": null
         },
         {
@@ -2224,9 +2220,7 @@ export const DATA = {
             "tier": "Tier-0",
             "country_code": "FRA",
             "language": "fr",
-            "tags": [
-                "agency"
-            ],
+            "tags": [],
             "logo_url": null
         },
         {
@@ -2235,9 +2229,7 @@ export const DATA = {
             "tier": "Tier-1",
             "country_code": "GBR",
             "language": "en",
-            "tags": [
-                "broadcaster"
-            ],
+            "tags": [],
             "logo_url": null
         },
         {
@@ -2246,42 +2238,7 @@ export const DATA = {
             "tier": "Tier-1",
             "country_code": "USA",
             "language": "en",
-            "tags": [
-                "broadcaster"
-            ],
-            "logo_url": null
-        },
-        {
-            "domain": "nytimes.com",
-            "name": "The New York Times",
-            "tier": "Tier-1",
-            "country_code": "USA",
-            "language": "en",
-            "tags": [
-                "newspaper"
-            ],
-            "logo_url": null
-        },
-        {
-            "domain": "washingtonpost.com",
-            "name": "The Washington Post",
-            "tier": "Tier-1",
-            "country_code": "USA",
-            "language": "en",
-            "tags": [
-                "newspaper"
-            ],
-            "logo_url": null
-        },
-        {
-            "domain": "theguardian.com",
-            "name": "The Guardian",
-            "tier": "Tier-1",
-            "country_code": "GBR",
-            "language": "en",
-            "tags": [
-                "newspaper"
-            ],
+            "tags": [],
             "logo_url": null
         },
         {
@@ -2290,9 +2247,34 @@ export const DATA = {
             "tier": "Tier-1",
             "country_code": "QAT",
             "language": "en",
-            "tags": [
-                "broadcaster"
-            ],
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "nytimes.com",
+            "name": "New York Times",
+            "tier": "Tier-1",
+            "country_code": "USA",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "theguardian.com",
+            "name": "The Guardian",
+            "tier": "Tier-1",
+            "country_code": "GBR",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "washingtonpost.com",
+            "name": "Washington Post",
+            "tier": "Tier-1",
+            "country_code": "USA",
+            "language": "en",
+            "tags": [],
             "logo_url": null
         },
         {
@@ -2301,9 +2283,7 @@ export const DATA = {
             "tier": "Tier-1",
             "country_code": "FRA",
             "language": "fr",
-            "tags": [
-                "newspaper"
-            ],
+            "tags": [],
             "logo_url": null
         },
         {
@@ -2312,53 +2292,529 @@ export const DATA = {
             "tier": "Tier-1",
             "country_code": "DEU",
             "language": "de",
-            "tags": [
-                "magazine"
-            ],
+            "tags": [],
             "logo_url": null
         },
         {
             "domain": "elpais.com",
-            "name": "El Pa\u00eds",
+            "name": "El Pais",
             "tier": "Tier-1",
             "country_code": "ESP",
             "language": "es",
-            "tags": [
-                "newspaper"
-            ],
+            "tags": [],
             "logo_url": null
         },
         {
-            "domain": "folha.uol.com.br",
-            "name": "Folha de S.Paulo",
+            "domain": "chinadaily.com.cn",
+            "name": "China Daily",
             "tier": "Tier-1",
-            "country_code": "BRA",
-            "language": "pt",
-            "tags": [
-                "newspaper"
-            ],
+            "country_code": "CHN",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "rt.com",
+            "name": "Russia Today",
+            "tier": "Tier-1",
+            "country_code": "RUS",
+            "language": "en",
+            "tags": [],
             "logo_url": null
         },
         {
             "domain": "timesofindia.indiatimes.com",
-            "name": "The Times of India",
+            "name": "Times of India",
             "tier": "Tier-1",
             "country_code": "IND",
             "language": "en",
-            "tags": [
-                "newspaper"
-            ],
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "theaustralian.com.au",
+            "name": "The Australian",
+            "tier": "Tier-1",
+            "country_code": "AUS",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "theglobeandmail.com",
+            "name": "Globe and Mail",
+            "tier": "Tier-1",
+            "country_code": "CAN",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "asahi.com",
+            "name": "Asahi Shimbun",
+            "tier": "Tier-1",
+            "country_code": "JPN",
+            "language": "ja",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "straitstimes.com",
+            "name": "Straits Times",
+            "tier": "Tier-1",
+            "country_code": "SGP",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "scmp.com",
+            "name": "South China Morning Post",
+            "tier": "Tier-1",
+            "country_code": "HKG",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "oglobo.globo.com",
+            "name": "O Globo",
+            "tier": "Tier-1",
+            "country_code": "BRA",
+            "language": "pt",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "lanacion.com.ar",
+            "name": "La Nacion",
+            "tier": "Tier-1",
+            "country_code": "ARG",
+            "language": "es",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "english.ahram.org.eg",
+            "name": "Ahram Online",
+            "tier": "Tier-1",
+            "country_code": "EGY",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "nation.africa",
+            "name": "Daily Nation",
+            "tier": "Tier-1",
+            "country_code": "KEN",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "thejakartapost.com",
+            "name": "Jakarta Post",
+            "tier": "Tier-1",
+            "country_code": "IDN",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "xinhuanet.com",
+            "name": "Xinhua",
+            "tier": "Tier-0",
+            "country_code": "CHN",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "efe.com",
+            "name": "EFE",
+            "tier": "Tier-0",
+            "country_code": "ESP",
+            "language": "es",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "dpa.com",
+            "name": "DPA",
+            "tier": "Tier-0",
+            "country_code": "DEU",
+            "language": "de",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "ansa.it",
+            "name": "ANSA",
+            "tier": "Tier-0",
+            "country_code": "ITA",
+            "language": "it",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "kyodonews.net",
+            "name": "Kyodo News",
+            "tier": "Tier-0",
+            "country_code": "JPN",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "yna.co.kr",
+            "name": "Yonhap",
+            "tier": "Tier-0",
+            "country_code": "KOR",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "tass.com",
+            "name": "TASS",
+            "tier": "Tier-0",
+            "country_code": "RUS",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "news.sky.com",
+            "name": "Sky News",
+            "tier": "Tier-1",
+            "country_code": "GBR",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "abc.net.au",
+            "name": "ABC News Australia",
+            "tier": "Tier-1",
+            "country_code": "AUS",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "cbc.ca",
+            "name": "CBC",
+            "tier": "Tier-1",
+            "country_code": "CAN",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "euronews.com",
+            "name": "Euronews",
+            "tier": "Tier-1",
+            "country_code": "EU",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "telesurtv.net",
+            "name": "TeleSUR",
+            "tier": "Tier-1",
+            "country_code": "VEN",
+            "language": "es",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "yomiuri.co.jp",
+            "name": "The Yomiuri Shimbun",
+            "tier": "Tier-1",
+            "country_code": "JPN",
+            "language": "ja",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "usatoday.com",
+            "name": "USA Today",
+            "tier": "Tier-1",
+            "country_code": "USA",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "bhaskar.com",
+            "name": "Dainik Bhaskar",
+            "tier": "Tier-1",
+            "country_code": "IND",
+            "language": "hi",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "jagran.com",
+            "name": "Dainik Jagran",
+            "tier": "Tier-1",
+            "country_code": "IND",
+            "language": "hi",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "mainichi.jp",
+            "name": "The Mainichi",
+            "tier": "Tier-1",
+            "country_code": "JPN",
+            "language": "ja",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "cankaoxiaoxi.com",
+            "name": "Cankao Xiaoxi",
+            "tier": "Tier-1",
+            "country_code": "CHN",
+            "language": "zh",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "amarujala.com",
+            "name": "Amar Ujala",
+            "tier": "Tier-1",
+            "country_code": "IND",
+            "language": "hi",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "nikkei.com",
+            "name": "The Nikkei",
+            "tier": "Tier-1",
+            "country_code": "JPN",
+            "language": "ja",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "people.cn",
+            "name": "People's Daily",
+            "tier": "Tier-1",
+            "country_code": "CHN",
+            "language": "zh",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "livehindustan.com",
+            "name": "Hindustan",
+            "tier": "Tier-1",
+            "country_code": "IND",
+            "language": "hi",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "manoramaonline.com",
+            "name": "Malayala Manorama",
+            "tier": "Tier-1",
+            "country_code": "IND",
+            "language": "ml",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "bild.de",
+            "name": "Bild",
+            "tier": "Tier-1",
+            "country_code": "DEU",
+            "language": "de",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "gzdaily.dayoo.com",
+            "name": "Guangzhou Daily",
+            "tier": "Tier-1",
+            "country_code": "CHN",
+            "language": "zh",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "nandu.com",
+            "name": "Nanfang City News",
+            "tier": "Tier-1",
+            "country_code": "CHN",
+            "language": "zh",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "patrika.com",
+            "name": "Rajasthan Patrika",
+            "tier": "Tier-1",
+            "country_code": "IND",
+            "language": "hi",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "dw.com",
+            "name": "Deutsche Welle",
+            "tier": "Tier-1",
+            "country_code": "DEU",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "france24.com",
+            "name": "France 24",
+            "tier": "Tier-1",
+            "country_code": "FRA",
+            "language": "en",
+            "tags": [],
             "logo_url": null
         },
         {
             "domain": "nhk.or.jp",
-            "name": "NHK",
+            "name": "NHK World",
             "tier": "Tier-1",
             "country_code": "JPN",
-            "language": "ja",
-            "tags": [
-                "broadcaster"
-            ],
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "channelnewsasia.com",
+            "name": "CNA (Channel News Asia)",
+            "tier": "Tier-1",
+            "country_code": "SGP",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "sabcnews.com",
+            "name": "South African Broadcasting Corporation",
+            "tier": "Tier-1",
+            "country_code": "ZAF",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "trtworld.com",
+            "name": "TRT World",
+            "tier": "Tier-1",
+            "country_code": "TUR",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "cgtn.com",
+            "name": "CGTN",
+            "tier": "Tier-1",
+            "country_code": "CHN",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "ndtv.com",
+            "name": "NDTV",
+            "tier": "Tier-1",
+            "country_code": "IND",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "globo.com",
+            "name": "Globo",
+            "tier": "Tier-1",
+            "country_code": "BRA",
+            "language": "pt",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "elmundo.es",
+            "name": "El Mundo",
+            "tier": "Tier-1",
+            "country_code": "ESP",
+            "language": "es",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "corriere.it",
+            "name": "Corriere della Sera",
+            "tier": "Tier-1",
+            "country_code": "ITA",
+            "language": "it",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "lefigaro.fr",
+            "name": "Le Figaro",
+            "tier": "Tier-1",
+            "country_code": "FRA",
+            "language": "fr",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "kompas.com",
+            "name": "Kompas",
+            "tier": "Tier-1",
+            "country_code": "IDN",
+            "language": "id",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "bangkokpost.com",
+            "name": "Bangkok Post",
+            "tier": "Tier-1",
+            "country_code": "THA",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "dawn.com",
+            "name": "Dawn",
+            "tier": "Tier-1",
+            "country_code": "PAK",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "haaretz.com",
+            "name": "Haaretz",
+            "tier": "Tier-1",
+            "country_code": "ISR",
+            "language": "en",
+            "tags": [],
+            "logo_url": null
+        },
+        {
+            "domain": "arabnews.com",
+            "name": "Arab News",
+            "tier": "Tier-1",
+            "country_code": "SAU",
+            "language": "en",
+            "tags": [],
             "logo_url": null
         }
     ]

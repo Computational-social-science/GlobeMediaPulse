@@ -26,6 +26,7 @@ docker-compose up --build
 - PostgreSQL: localhost:5433
 - Redis: localhost:6380 (RedisInsight UI: http://localhost:8003)
 - MinIO API: http://localhost:9002 (Console: http://localhost:9003)
+- Workflow API: http://localhost:8002/system/workflows/list (see Swagger)
 
 ### Stop
 ```bash
@@ -49,6 +50,14 @@ Frontend checks (inside container):
 docker-compose exec frontend npm run lint
 docker-compose exec frontend npm run typecheck
 ```
+
+## 3.1 Workflow Operations
+
+Workflows are defined in `backend/workflows/flows.py` and can be triggered via backend endpoints.
+
+- List workflows: `GET /system/workflows/list`
+- Run workflow: `POST /system/workflows/run` (requires `SYNC_TOKEN` header)
+- Query recent runs/logs: `GET /system/workflows/snapshot`
 
 ## 4. Publishing (Long-term Free)
 

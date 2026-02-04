@@ -11,23 +11,23 @@ test('system monitor controls fits without scroll and logs are scrollable', asyn
   await page.waitForSelector('.maplibregl-map', { timeout: 30000 });
   await page.locator('.z-\\[10000\\]').waitFor({ state: 'detached', timeout: 60000 });
 
-  const monitor = page.getByRole('dialog', { name: 'SYSTEM MONITOR' });
-  await expect(monitor).toBeVisible();
-  await monitor.getByRole('button', { name: 'Controls' }).evaluate((el) => (el as HTMLElement).click());
+  await page.locator('aside nav button').first().click();
 
-  const controls = monitor.getByTestId('system-controls');
-  await expect(controls).toBeVisible();
-  const controlsScroll = await controls.evaluate(el => ({
+  const monitor = page.getByRole('dialog', { name: 'Status' });
+  await expect(monitor).toBeVisible();
+
+  const body = monitor.locator('.fw-body');
+  const bodyScroll = await body.evaluate((el) => ({
     clientHeight: el.clientHeight,
     scrollHeight: el.scrollHeight
   }));
-  expect(controlsScroll.scrollHeight).toBeLessThanOrEqual(controlsScroll.clientHeight);
+  expect(bodyScroll.scrollHeight).toBeLessThanOrEqual(bodyScroll.clientHeight);
 
-  await monitor.getByRole('button', { name: 'Logs' }).evaluate((el) => (el as HTMLElement).click());
-  const logsContainer = monitor.getByTestId('system-logs');
-  const logsScroll = monitor.getByTestId('system-logs-scroll');
-  await expect(logsContainer).toBeVisible();
-  const overflowY = await logsScroll.evaluate(el => getComputedStyle(el).overflowY);
+  const logsPanel = monitor.locator('.sidebar-panel-sub').filter({ hasText: 'Logs' }).first();
+  await expect(logsPanel).toBeVisible();
+
+  const logsScroll = logsPanel.locator('.overflow-auto').first();
+  const overflowY = await logsScroll.evaluate((el) => getComputedStyle(el).overflowY);
   expect(overflowY).toBe('auto');
 });
 
@@ -79,9 +79,11 @@ test('territory boundaries render and header stats load', async ({ page }) => {
   await page.waitForSelector('.maplibregl-map', { timeout: 30000 });
   await page.locator('.z-\\[10000\\]').waitFor({ state: 'detached', timeout: 60000 });
 
-  const header = page.locator('header');
-  await expect(header.getByText('SOURCES')).toBeVisible();
-  await expect(header.getByText('123')).toBeVisible();
+  await page.locator('aside nav button').first().click();
+  const monitor = page.getByRole('dialog', { name: 'Status' });
+  await expect(monitor).toBeVisible();
+  await expect(monitor.getByText('SRC')).toBeVisible();
+  await expect(monitor.getByText('123')).toBeVisible();
 
   await page.waitForFunction(() => {
     const map = (window as unknown as {

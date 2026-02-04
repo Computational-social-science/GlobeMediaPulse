@@ -1,37 +1,129 @@
-name: Deploy to GitHub Pages
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [ main ]
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      fast_sync:
+        description: "Skip quality and integration checks"
+        required: false
+        default: "false"
 
 jobs:
-  build:
+  quality-check:
+    if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[hot-sync]')) && !(github.event_name == 'workflow_dispatch' && inputs.fast_sync == 'true') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install dependencies
-        run: cd frontend && npm install
-      - name: Build
-        run: cd frontend && npm run build
-      - uses: actions/upload-pages-artifact@v3
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        run: cd frontend && npm ci
+
+      - name: Lint & Type Check
+        run: |
+          cd frontend
+          npm run lint
+          npm run typecheck
+
+  integration-test:
+    needs: quality-check
+    if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[hot-sync]')) && !(github.event_name == 'workflow_dispatch' && inputs.fast_sync == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          path: frontend/dist
+          python-version: '3.11'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pytest sqlalchemy psycopg2-binary
+
+      - name: Setup Docker Compose
+        run: |
+          # Create .env for testing
+          cp .env.example .env
+          docker compose up -d --build backend db redis
+
+      - name: Wait for Services
+        run: sleep 30
+
+      - name: Run Validation Suite
+        run: python scripts/validate_deployment.py
+
+      - name: Upload validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-reports
+          path: |
+            reports/*.xml
+
+      - name: Stop Services
+        if: always()
+        run: docker compose down
 
   deploy:
-    needs: build
+    needs: [quality-check, integration-test]
+    if: ${{ always() && github.ref == 'refs/heads/main' && secrets.OCI_HOST != '' && secrets.OCI_USER != '' && secrets.OCI_SSH_KEY != '' && ((needs.quality-check.result == 'success' && needs.integration-test.result == 'success') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[hot-sync]')) || (github.event_name == 'workflow_dispatch' && inputs.fast_sync == 'true')) }}
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    timeout-minutes: 30
     steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Deploy to Production (SSH)
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USER }}
+          key: ${{ secrets.OCI_SSH_KEY }}
+          script: |
+            set -e
+            PROJECT_DIR="$HOME/GlobeMediaPulse"
+            if [ ! -d "$PROJECT_DIR/.git" ]; then
+              git clone https://github.com/${{ github.repository }}.git "$PROJECT_DIR"
+            fi
+            cd "$PROJECT_DIR"
+            git fetch --all --tags
+            export DEPLOY_REF="${{ github.sha }}"
+            chmod +x deploy.sh
+            ./deploy.sh
+
+      - name: Smoke Test (Remote)
+        id: smoke_test
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install requests
+          python tests/smoke_test_remote.py --url http://${{ secrets.OCI_HOST }}:8000
+
+      - name: Rollback on Failure
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USER }}
+          key: ${{ secrets.OCI_SSH_KEY }}
+          script: |
+            cd "$HOME/GlobeMediaPulse"
+            chmod +x scripts/rollback_remote.sh
+            ./scripts/rollback_remote.sh

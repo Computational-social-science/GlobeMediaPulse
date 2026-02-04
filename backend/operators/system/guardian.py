@@ -62,6 +62,31 @@ class SystemGuardianOperator:
         self._initialized = True
         logger.info("SystemGuardianOperator initialized.")
 
+    def _external_crawler_enabled(self) -> bool:
+        mode = (os.getenv("CRAWLER_MODE") or "").strip().lower()
+        if not mode:
+            return False
+        return mode in ("external", "docker", "compose")
+
+    def _external_crawler_is_alive(self) -> Optional[Dict[str, Any]]:
+        if not self.redis_url:
+            return None
+        key = (os.getenv("CRAWLER_HEARTBEAT_KEY") or "gmp:crawler:heartbeat").strip()
+        stale_s = float(os.getenv("CRAWLER_HEARTBEAT_STALE_S") or "45")
+        try:
+            raw = self.redis_client.get(key)
+            if raw is None:
+                return {"alive": False, "age_s": None, "key": key, "stale_s": stale_s}
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", errors="replace")
+            ts = float(str(raw).strip() or "0")
+            age_s = max(0.0, time.time() - ts) if ts else None
+            alive = (age_s is not None) and (age_s <= stale_s)
+            return {"alive": alive, "age_s": age_s, "key": key, "stale_s": stale_s}
+        except Exception as e:
+            self.last_redis_error = str(e)
+            return {"alive": False, "age_s": None, "key": key, "error": str(e)}
+
     @property
     def redis_client(self):
         if self._redis_client is None:
@@ -108,35 +133,52 @@ class SystemGuardianOperator:
             Dict containing status of 'postgres', 'redis', 'threads', and global 'status'.
         """
         services = await self._check_services_parallel()
-        crawler_running = process_manager.is_crawler_running()
-        if crawler_running:
-            thread_status.heartbeat('crawler')
-            if self._crawler_restart_failures:
-                self._crawler_restart_failures = 0
-                self._crawler_restart_backoff_s = 60.0
+        if self._external_crawler_enabled():
+            ext = self._external_crawler_is_alive() or {}
+            services["crawler_diag"] = {"external": True, "heartbeat": ext}
+            services["crawler_health"] = "ok" if bool(ext.get("alive")) else "degraded"
+            services["crawler"] = "ok" if bool(ext.get("alive")) else "error"
         else:
-            services["crawler"] = "error"
-            if autoheal:
-                now = time.time()
-                if now - self._last_crawler_restart_at >= float(self._crawler_restart_backoff_s):
-                    try:
-                        await asyncio.to_thread(process_manager.restart_crawler)
-                        self._last_crawler_restart_at = now
-                        self._crawler_restart_failures = 0
-                        self._crawler_restart_backoff_s = 60.0
-                        services["crawler"] = "restarting"
-                    except Exception as e:
-                        self._last_crawler_restart_at = now
-                        self._crawler_restart_failures += 1
-                        self._crawler_restart_backoff_s = min(
-                            900.0,
-                            max(60.0, 30.0 * (2.0 ** min(float(self._crawler_restart_failures), 5.0))),
-                        )
-                        services["crawler"] = "error"
-                        services["crawler_error"] = str(e)
-                        services["crawler_diag"] = process_manager.get_crawler_diagnostics()
-                else:
-                    services["crawler_diag"] = process_manager.get_crawler_diagnostics()
+            crawler_diag = process_manager.get_crawler_diagnostics()
+            services["crawler_diag"] = crawler_diag
+            crawler_alerts = (crawler_diag or {}).get("alerts") or {}
+            crawler_health = "ok"
+            if crawler_alerts.get("has_traceback"):
+                crawler_health = "degraded"
+            elif int(crawler_alerts.get("rate_limit_hits") or 0) >= 25:
+                crawler_health = "degraded"
+            elif int(crawler_alerts.get("network_error_hits") or 0) >= 25:
+                crawler_health = "degraded"
+            services["crawler_health"] = crawler_health
+
+            crawler_running = process_manager.is_crawler_running()
+            if crawler_running:
+                thread_status.heartbeat('crawler')
+                if self._crawler_restart_failures:
+                    self._crawler_restart_failures = 0
+                    self._crawler_restart_backoff_s = 60.0
+            else:
+                services["crawler"] = "error"
+                if autoheal:
+                    now = time.time()
+                    if now - self._last_crawler_restart_at >= float(self._crawler_restart_backoff_s):
+                        try:
+                            await asyncio.to_thread(process_manager.restart_crawler)
+                            self._last_crawler_restart_at = now
+                            self._crawler_restart_failures = 0
+                            self._crawler_restart_backoff_s = 60.0
+                            services["crawler"] = "restarting"
+                        except Exception as e:
+                            self._last_crawler_restart_at = now
+                            self._crawler_restart_failures += 1
+                            self._crawler_restart_backoff_s = min(
+                                900.0,
+                                max(60.0, 30.0 * (2.0 ** min(float(self._crawler_restart_failures), 5.0))),
+                            )
+                            services["crawler"] = "error"
+                            services["crawler_error"] = str(e)
+                    else:
+                        pass
             
         thread_stats = thread_status.get_status()
         
@@ -145,6 +187,7 @@ class SystemGuardianOperator:
         crawler_ok = services.get("crawler") in ("ok", "restarting")
         is_healthy = postgres_ok and redis_ok and crawler_ok
         status = "ok" if is_healthy else "degraded"
+        metrics = await self._collect_metrics()
         
         # Thread Health Logic
         # If critical threads are dead/stalled, downgrade status
@@ -164,6 +207,8 @@ class SystemGuardianOperator:
             "threads": thread_stats,
             "timestamp": time.time()
         }
+        if metrics:
+            report["metrics"] = metrics
         if services.get("postgres") != "ok" or services.get("redis") != "ok":
             report["service_details"] = {
                 "postgres_error": self.last_postgres_error,
@@ -197,6 +242,14 @@ class SystemGuardianOperator:
 
         return report
 
+    async def _collect_metrics(self) -> Dict[str, Any]:
+        metrics: Dict[str, Any] = {}
+        if settings.DATABASE_URL:
+            metrics["postgres_pool"] = await asyncio.to_thread(self._get_postgres_pool_metrics)
+        if self.redis_url:
+            metrics["redis"] = await asyncio.to_thread(self._get_redis_metrics)
+        return metrics
+
     async def auto_heal(self) -> Dict[str, Any]:
         """
         Executes self-healing procedures.
@@ -227,12 +280,17 @@ class SystemGuardianOperator:
 
         # 3. Heal Crawler
         try:
-            if not process_manager.is_crawler_running():
-                logger.warning("Healing: Crawler process found dead. Restarting...")
-                process_manager.restart_crawler()
-                actions_taken.append("crawler_restarted")
+            if self._external_crawler_enabled():
+                ext = self._external_crawler_is_alive() or {}
+                actions_taken.append("crawler_external_mode")
+                actions_taken.append(f"crawler_external_alive={bool(ext.get('alive'))}")
             else:
-                actions_taken.append("crawler_running_ok")
+                if not process_manager.is_crawler_running():
+                    logger.warning("Healing: Crawler process found dead. Restarting...")
+                    process_manager.restart_crawler()
+                    actions_taken.append("crawler_restarted")
+                else:
+                    actions_taken.append("crawler_running_ok")
         except Exception as e:
             actions_taken.append(f"crawler_restart_failed: {e}")
 
@@ -274,13 +332,49 @@ class SystemGuardianOperator:
                 return "error"
 
         pg_status, redis_status = await asyncio.gather(check_pg(), check_redis())
-        crawler_status = "ok" if process_manager.is_crawler_running() else "error"
+        if self._external_crawler_enabled():
+            ext = self._external_crawler_is_alive() or {}
+            crawler_status = "ok" if bool(ext.get("alive")) else "error"
+        else:
+            crawler_status = "ok" if process_manager.is_crawler_running() else "error"
         
         return {
             "postgres": pg_status,
             "redis": redis_status,
             "crawler": crawler_status
         }
+
+    def _get_postgres_pool_metrics(self) -> Dict[str, Any]:
+        try:
+            return db_manager.get_pool_metrics()
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    def _get_redis_metrics(self) -> Dict[str, Any]:
+        client = self.redis_client
+        if not client:
+            return {"status": "uninitialized"}
+        try:
+            info = client.info()
+            hits = info.get("keyspace_hits")
+            misses = info.get("keyspace_misses")
+            hit_rate = None
+            if isinstance(hits, (int, float)) and isinstance(misses, (int, float)):
+                total = hits + misses
+                hit_rate = (hits / total) if total else None
+            return {
+                "status": "ok",
+                "hits": hits,
+                "misses": misses,
+                "hit_rate": hit_rate,
+                "used_memory": info.get("used_memory"),
+                "used_memory_human": info.get("used_memory_human"),
+                "connected_clients": info.get("connected_clients"),
+                "uptime_in_seconds": info.get("uptime_in_seconds"),
+            }
+        except Exception as e:
+            self.last_redis_error = str(e)
+            return {"status": "error", "error": str(e)}
 
     def _check_postgres_sync(self) -> bool:
         if not psycopg2:

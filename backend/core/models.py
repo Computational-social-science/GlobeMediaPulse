@@ -1,10 +1,28 @@
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, Float, func
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.types import JSON, TypeDecorator
 
 class Base(DeclarativeBase):
     """Base class for all SQLAlchemy models."""
     pass
+
+class FlexibleJSON(TypeDecorator):
+    impl = JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(JSONB())
+        return dialect.type_descriptor(JSON())
+
+class UiPreference(Base):
+    __tablename__ = "ui_preferences"
+
+    key = Column(Text, primary_key=True)
+    value = Column(FlexibleJSON, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 class FetchLog(Base):
     """
@@ -66,7 +84,7 @@ class NewsArticle(Base):
 
     # Intelligence & Analysis (The "Brain")
     # Cross-Lingual Entity Alignment
-    entities = Column(JSONB, nullable=True) # Extracted entities and QIDs
+    entities = Column(FlexibleJSON, nullable=True) # Extracted entities and QIDs
     
     # Narrative Divergence
     sentiment_score = Column(Float, nullable=True) # -1.0 to 1.0
@@ -98,8 +116,6 @@ class CandidateSource(Base):
     found_on = Column(Text) # URL where this was found (Referer)
     found_at = Column(DateTime, server_default=func.now())
     status = Column(Text, default="pending") # pending, approved, rejected
-    tier_suggestion = Column(Text, nullable=True)
-    citation_count = Column(Integer, default=1)
 
 class MediaSource(Base):
     """
@@ -133,4 +149,3 @@ class MediaSource(Base):
     
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
-

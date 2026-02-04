@@ -1,4 +1,6 @@
 import json
+import ast
+import re
 from pathlib import Path
 
 # Paths
@@ -7,6 +9,53 @@ COUNTRIES_DATA_PATH = BASE_DIR / 'data/countries_data.json'
 CONSTANTS_PATH = BASE_DIR / 'backend/data/constants.json'
 MEDIA_SEEDS_PATH = BASE_DIR / 'backend/resources/media_seeds.json'
 OUTPUT_PATH = BASE_DIR / 'frontend/src/lib/data.js'
+
+def _load_seed_data_from_seed_script() -> list[dict]:
+    seed_py = BASE_DIR / "backend" / "scripts" / "seed_media_sources.py"
+    if not seed_py.exists():
+        return []
+    try:
+        text = seed_py.read_text(encoding="utf-8")
+        m = re.search(
+            r"SEED_DATA\s*=\s*(\[.*?\n\])\s*\n\s*def seed_media_sources",
+            text,
+            re.S,
+        )
+        if not m:
+            return []
+        raw = ast.literal_eval(m.group(1))
+        if not isinstance(raw, list):
+            return []
+        seeds: list[dict] = []
+        seen: set[str] = set()
+        for src in raw:
+            if not isinstance(src, dict):
+                continue
+            domain = src.get("domain")
+            name = src.get("name")
+            if not domain or not name:
+                continue
+            domain = str(domain).lower().strip()
+            if not domain or domain in seen:
+                continue
+            seen.add(domain)
+            tier = src.get("tier") or "Unknown"
+            country_code = src.get("country_code") or src.get("country") or None
+            language = src.get("language")
+            seeds.append(
+                {
+                    "domain": domain,
+                    "name": str(name),
+                    "tier": str(tier),
+                    "country_code": str(country_code).upper() if country_code else None,
+                    "language": str(language) if language else None,
+                    "tags": [],
+                    "logo_url": None,
+                }
+            )
+        return seeds
+    except Exception:
+        return []
 
 def build_frontend_data():
     print("Building frontend data...")
@@ -86,6 +135,12 @@ def build_frontend_data():
             print(f"Warning: Failed to load media seeds: {e}")
     else:
         print("Warning: backend/resources/media_seeds.json not found.")
+
+    if len(seeds) < 50:
+        fallback = _load_seed_data_from_seed_script()
+        if fallback:
+            seeds = fallback
+            print(f"Loaded {len(seeds)} media seeds from backend/scripts/seed_media_sources.py.")
 
     data["MEDIA_SOURCES"] = seeds
 

@@ -99,6 +99,32 @@ class DatabaseManager:
             self.initialize()
         return self._pool
 
+    def get_pool_metrics(self) -> dict:
+        pool = self.get_pool()
+        if not pool:
+            return {"status": "uninitialized"}
+        try:
+            used = len(getattr(pool, "_used", {}) or {})
+        except Exception:
+            used = None
+        try:
+            idle = len(getattr(pool, "_pool", []) or [])
+        except Exception:
+            idle = None
+        minconn = getattr(pool, "_minconn", None)
+        maxconn = getattr(pool, "_maxconn", None)
+        total = None
+        if idle is not None or used is not None:
+            total = (idle or 0) + (used or 0)
+        return {
+            "status": "ok",
+            "minconn": minconn,
+            "maxconn": maxconn,
+            "idle": idle,
+            "in_use": used,
+            "total": total,
+        }
+
     def close(self):
         """
         Gracefully close all connections in the pool.

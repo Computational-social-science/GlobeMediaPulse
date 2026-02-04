@@ -73,6 +73,14 @@ For high-availability scheduling without external dependencies:
 - **Recommendation:** Integrate `APScheduler` (Advanced Python Scheduler) directly into the backend `main.py` or a dedicated worker.
 - **Why:** Free, Python-native, handles cron-style triggers, and avoids the complexity of Airflow for this scale.
 
+### 3.1.1 Workflow Orchestration
+- **Design:** Workflows are implemented as Python functions in `backend/workflows/flows.py`.
+- **Operator Interface:** Use backend APIs (Swagger `/docs`) for observability and manual triggering:
+  - `GET /system/workflows/list`
+  - `POST /system/workflows/run` (requires `SYNC_TOKEN`)
+  - `GET /system/workflows/snapshot`
+- **Observability:** Critical path tracing is handled via OpenTelemetry spans around webhook/hot-sync operations.
+
 ### 3.2 CI/CD Pipeline (GitHub Actions)
 **Workflow:**
 1.  **Push to Main:** Triggers unit tests (`pytest`) and linting (`eslint`).
@@ -112,3 +120,34 @@ For high-availability scheduling without external dependencies:
 2.  **Restore Data** from latest backup tarball.
 3.  **Start Services:** `docker-compose up -d`.
 4.  **Verify:** Check `docker ps` and tail logs.
+
+---
+
+## 5. SRC (Media Sources) Migration & Recovery SOP
+
+### 5.1 Baseline Seeds (Tier-0/Tier-1)
+- **Canonical baseline list:** `backend/scripts/seed_media_sources.py` (`SEED_DATA`)
+- **Bootstrap behavior:** when DB is empty/unavailable, the runtime classifier can fall back to this baseline seed list.
+- **DB seeding (local/remote):**
+  - Set `DATABASE_URL`, then run:
+    - `python backend/scripts/seed_media_sources.py`
+
+### 5.2 Large-Scale Source Import (MediaCloud)
+- **Goal:** rebuild tens-of-thousands of sources into `media_sources` table.
+- **Prerequisite:** `MEDIA_CLOUD_API_KEY` set in environment.
+- **Entry points:**
+  - `python scripts/import_mediacloud_seeds.py`
+  - `python scripts/full_global_seed.py`
+
+### 5.3 Remote → Local SRC Sync (Source-of-Truth)
+- **Purpose:** recover a known-good `media_sources` dataset from a remote running instance.
+- **Prerequisites:**
+  - Remote backend exposes export endpoints and has `SYNC_TOKEN` set.
+  - Local has DB connectivity configured via `DATABASE_URL`.
+- **Command:**
+  - `python manage.py sync-from-remote --remote-api <REMOTE_API_URL> --token <SYNC_TOKEN> --tiers Tier-0,Tier-1 --limit 0`
+- **Optional:**
+  - Add `--include-candidates` to sync `candidate_sources` too.
+
+### 5.4 CI/CD Guardrail
+- The CI test suite enforces a minimum baseline seed count (prevents accidental SRC collapse in refactors).

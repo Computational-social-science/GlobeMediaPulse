@@ -16,7 +16,7 @@ export default [
     }
   },
   {
-    ignores: ['build/', 'dist/', '.svelte-kit/']
+    ignores: ['build/', 'dist/', '.svelte-kit/', 'coverage/']
   },
   {
     files: ['**/*.svelte'],

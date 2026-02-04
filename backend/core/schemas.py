@@ -1,37 +1,48 @@
 from enum import Enum
-from typing import List, Optional
+from typing import Optional, Dict
 from pydantic import BaseModel
 
 class MediaTier(str, Enum):
-    """
-    Classification of media sources based on influence and geographic scope.
-    
-    Research Motivation:
-        - **Tier-0 (Global Mainstream)**: High-impact, globally cited sources (e.g., Reuters, AP). 
-          Used as "seed nodes" for snowball sampling.
-        - **Tier-1 (National Mainstream)**: Major national outlets with significant domestic influence.
-        - **Tier-2 (Local/Regional)**: Hyper-local or niche sources. 
-          Target for discovery via citation analysis from Tier-0/1.
-    """
-    TIER_0 = "Tier-0"  # Global Mainstream
-    TIER_1 = "Tier-1"  # National Mainstream
-    TIER_2 = "Tier-2"  # Local/Regional
-    UNKNOWN = "Unknown"
+    TIER_0 = "Tier-0"
+    TIER_1 = "Tier-1"
+    TIER_2 = "Tier-2"
+    UNKNOWN = "UNKNOWN"
 
 class MediaSource(BaseModel):
-    """
-    Data model representing a verified media source.
-    """
-    name: str
     domain: str
-    tier: MediaTier
-    country: Optional[str] = None
+    name: Optional[str] = None
+    short_name: Optional[str] = None
+    abbr: Optional[str] = None
+    tier: MediaTier = MediaTier.UNKNOWN
+    country: str = "UNK"
+    country_name: Optional[str] = None
+    type: Optional[str] = None
     language: Optional[str] = None
-    tags: List[str] = []
+    logo_url: Optional[str] = None
+    structure_simhash: Optional[str] = None
 
-class MediaLibrary(BaseModel):
-    """
-    Collection of verified media sources.
-    Used for bulk initialization and configuration.
-    """
-    sources: List[MediaSource]
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    email: Optional[str] = None
+
+class UserBase(BaseModel):
+    email: str
+    is_active: bool = True
+    is_superuser: bool = False
+
+class UserCreate(UserBase):
+    password: str
+
+class User(UserBase):
+    id: int
+    preferences: Dict = {}
+
+    class Config:
+        from_attributes = True
+
+class UserUpdate(BaseModel):
+    password: Optional[str] = None
+    preferences: Optional[Dict] = None

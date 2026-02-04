@@ -44,4 +44,18 @@
  * @property {number} intensity
  */
 
+declare global {
+  interface ImportMetaEnv {
+    VITE_API_URL?: string;
+    VITE_API_BASE_URL?: string;
+    VITE_WS_URL?: string;
+    VITE_STATIC_MODE?: string;
+    VITE_SENTRY_DSN?: string;
+  }
+
+  interface ImportMeta {
+    env: ImportMetaEnv;
+  }
+}
+
 export {};

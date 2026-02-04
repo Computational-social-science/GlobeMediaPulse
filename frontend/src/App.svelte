@@ -1,8 +1,8 @@
 <script lang="ts">
     import { onMount, onDestroy, setContext } from 'svelte';
-    import { get } from 'svelte/store';
+    import { get, type Writable } from 'svelte/store';
     import {
-        serviceStatus,
+        statusStore,
         systemStatus,
         backendThreadStatus,
         systemLogs,
@@ -13,16 +13,51 @@
         audioVolume,
         mapCommand,
         mediaProfileStats,
-        isSetupWizardOpen, // Imported
+        sidebarConfig,
+        loadSidebarConfig,
+        saveSidebarConfig,
+        clearSidebarConfig,
+        getDefaultSidebarConfig,
+        moveSidebarItem,
+        addSidebarGroup,
+        setSidebarGroupCollapsed,
+        tidySidebarConfig
     } from '@stores';
     import MapContainer from '@components/MapContainer.svelte';
     import Sidebar from '@components/Sidebar.svelte';
-    import SetupWizard from '@components/SetupWizard.svelte';
+    import FloatingWindow from '@components/FloatingWindow.svelte';
     import { DATA } from '@lib/data.js';
+    import { fetchRemoteSidebarConfig, saveRemoteSidebarConfig } from '@lib/sidebarSync';
     import {
         getStatusColor,
         getThreadStatusColor
     } from '@/utils/statusHelpers.js';
+
+    type StatusHealth = {
+        updatedAt: number;
+        apiOk: boolean;
+        apiLatencyMs: number | null;
+        services: {
+            postgres: string;
+            redis: string;
+        };
+        threads: {
+            crawler: string;
+            analyzer: string;
+            cleanup: string;
+        };
+    };
+    type SidebarItemId = 'status' | 'gde' | 'autoheal';
+    type SidebarGroup = { id: string; title: string; items: SidebarItemId[]; collapsed?: boolean };
+    type SidebarConfig = { version: number; groups: SidebarGroup[] };
+    type SidebarMovePayload = {
+        itemId: SidebarItemId;
+        fromGroupId: string;
+        toGroupId: string;
+        toIndex: number;
+    };
+
+    const statusStoreTyped = statusStore as Writable<{ health: StatusHealth }>;
 
     class SoundManager {
         ctx: AudioContext | null = null;
@@ -255,12 +290,99 @@
     const webSocketService = new WebSocketService();
     setContext('soundManager', soundManager);
 
-    function getViteEnv(): { VITE_API_URL?: string; VITE_API_BASE_URL?: string; VITE_WS_URL?: string; VITE_STATIC_MODE?: string } {
+    const HEALTH_REDIRECT_KEY = 'gmp_health_redirect_v1';
+    let toastMessage: string | null = null;
+    let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function showToast(message: string, duration = 4000) {
+        toastMessage = message;
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+            toastMessage = null;
+        }, duration);
+    }
+
+    function handleLegacyHealthRedirect() {
+        const path = window.location.pathname || '/';
+        const rawSearch = window.location.search || '';
+        const hash = window.location.hash || '';
+        const rawParts = rawSearch.startsWith('?') ? rawSearch.slice(1).split('&').filter(Boolean) : [];
+        const nextParts: string[] = [];
+        let shouldToast = false;
+        let needsReplace = false;
+        for (const part of rawParts) {
+            const [rawKey, ...rest] = part.split('=');
+            const key = decodeURIComponent(rawKey || '');
+            const value = decodeURIComponent(rest.join('=') || '');
+            if (key === 'legacy' && value === 'health') {
+                shouldToast = true;
+                needsReplace = true;
+                continue;
+            }
+            nextParts.push(part);
+        }
+        let nextPath = path;
+        if (path === '/health' || path.startsWith('/health/')) {
+            nextPath = path.replace(/^\/health/, '/status');
+            sessionStorage.setItem(HEALTH_REDIRECT_KEY, '1');
+            activeWindow = 'status';
+            activeView = null;
+            expandedPanel = null;
+            shouldToast = true;
+            needsReplace = true;
+        }
+        if (needsReplace) {
+            const nextSearch = nextParts.length ? `?${nextParts.join('&')}` : '';
+            const nextUrl = `${nextPath}${nextSearch}${hash}`;
+            window.history.replaceState(null, '', nextUrl);
+        }
+        if (sessionStorage.getItem(HEALTH_REDIRECT_KEY)) {
+            sessionStorage.removeItem(HEALTH_REDIRECT_KEY);
+            shouldToast = true;
+        }
+        if (shouldToast) {
+            showToast('Health已合并至Status');
+        }
+    }
+
+    function updateHealthState(patch: Partial<StatusHealth>) {
+        statusStoreTyped.update((current) => {
+            const currentHealth = current.health;
+            return {
+                ...current,
+                health: {
+                    ...currentHealth,
+                    ...patch,
+                    services: patch.services ? { ...currentHealth.services, ...patch.services } : currentHealth.services,
+                    threads: patch.threads ? { ...currentHealth.threads, ...patch.threads } : currentHealth.threads
+                }
+            };
+        });
+    }
+
+    function getViteEnv(): {
+        VITE_API_URL?: string;
+        VITE_API_BASE_URL?: string;
+        VITE_WS_URL?: string;
+        VITE_STATIC_MODE?: string;
+        VITE_SYNC_TOKEN?: string;
+    } {
         return (
             (import.meta as {
-                env?: { VITE_API_URL?: string; VITE_API_BASE_URL?: string; VITE_WS_URL?: string; VITE_STATIC_MODE?: string };
+                env?: {
+                    VITE_API_URL?: string;
+                    VITE_API_BASE_URL?: string;
+                    VITE_WS_URL?: string;
+                    VITE_STATIC_MODE?: string;
+                    VITE_SYNC_TOKEN?: string;
+                };
             }).env || {}
         );
+    }
+
+    function resolveSyncToken(): string {
+        const env = getViteEnv();
+        return String(env.VITE_SYNC_TOKEN || '').trim();
     }
 
     function isStaticMode(): boolean {
@@ -278,7 +400,7 @@
         return (
             env.VITE_API_URL ||
             env.VITE_API_BASE_URL ||
-            (window.location.hostname === 'localhost' ? 'http://localhost:8002' : '')
+            (window.location.hostname === 'localhost' ? 'http://localhost:8000' : '')
         );
     }
 
@@ -291,9 +413,6 @@
     let healthCheckTimer: ReturnType<typeof setTimeout>;
     let retryCount = 0;
     let isLoading = true;
-    let apiOk = false;
-    let apiLatencyMs: number | null = null;
-    let healthUpdatedAt = 0;
     let uiNow = Date.now();
     let gdeMetrics: {
         gde: number;
@@ -321,20 +440,47 @@
         news_articles_count: number;
     }> = [];
 
-    let activeView: 'health' | 'autoheal' | 'gde' = 'gde';
-    let expandedPanel: 'health' | 'autoheal' | 'gde' | null = 'gde';
-    let sidebarCollapsed = true;
-    let lastExpandedPanel: 'health' | 'autoheal' | 'gde' | null = 'gde';
-    let healthDetailExpanded = false;
+    let activeView: 'autoheal' | 'gde' | null = null;
+    let expandedPanel: 'autoheal' | 'gde' | null = 'gde';
+    let sidebarCollapsed = false;
+    let lastExpandedPanel: 'autoheal' | 'gde' | null = 'gde';
+    let activeWindow: 'status' | 'gde' | null = 'status';
+    let statusAutohealTab: 'status' | 'autoheal' = 'status';
     let autohealDetailExpanded = false;
     let safetyArmed = false;
     let safetyAutoDisarmTimer: ReturnType<typeof setTimeout> | null = null;
-    let statusPanelExpanded = true;
     const SIDEBAR_IDLE_MS = 12000;
     let sidebarIdleTimer: ReturnType<typeof setTimeout> | null = null;
     let sidebarScrollTimer: ReturnType<typeof setTimeout> | null = null;
     let isSidebarHovered = false;
     let isSidebarScrolling = false;
+    let sidebarConfigPersistTimer: ReturnType<typeof setTimeout> | null = null;
+    let sidebarConfigRemotePersistTimer: ReturnType<typeof setTimeout> | null = null;
+    let sidebarConfigRemoteAbort: AbortController | null = null;
+    let sidebarConfigTyped = getDefaultSidebarConfig() as SidebarConfig;
+    const SIDEBAR_LOCAL_UPDATED_KEY = 'sidebarConfigUpdatedAtMs';
+    const SIDEBAR_REMOTE_UPDATED_KEY = 'sidebarConfigRemoteUpdatedAtMs';
+
+    function scheduleRemoteSidebarConfigSave(config: unknown) {
+        if (typeof window === 'undefined') return;
+        if (sidebarConfigRemotePersistTimer) clearTimeout(sidebarConfigRemotePersistTimer);
+        sidebarConfigRemotePersistTimer = setTimeout(async () => {
+            const apiBase = resolveApiBase();
+            if (!apiBase || isStaticMode()) return;
+            if (sidebarConfigRemoteAbort) sidebarConfigRemoteAbort.abort();
+            const abort = new AbortController();
+            sidebarConfigRemoteAbort = abort;
+            const token = resolveSyncToken();
+            const saved = await saveRemoteSidebarConfig(apiBase, config, token || null, fetch, abort.signal);
+            if (saved?.updatedAtMs != null) {
+                try {
+                    window.localStorage.setItem(SIDEBAR_REMOTE_UPDATED_KEY, String(saved.updatedAtMs));
+                } catch {
+                    void 0;
+                }
+            }
+        }, 900);
+    }
 
     $: isOffline = $systemStatus === 'OFFLINE';
     $: isDegraded = $systemStatus === 'DEGRADED';
@@ -347,7 +493,57 @@
         safetyAutoDisarmTimer = null;
     }
 
+    $: apiOk = $statusStore.health.apiOk;
+    $: apiLatencyMs = $statusStore.health.apiLatencyMs;
+    $: healthUpdatedAt = $statusStore.health.updatedAt;
+
     $: growthLatest = growthMetrics.length ? growthMetrics[0] : null;
+    $: sidebarConfigTyped = $sidebarConfig as SidebarConfig;
+    $: if (typeof window !== 'undefined' && $sidebarConfig) {
+        if (sidebarConfigPersistTimer) clearTimeout(sidebarConfigPersistTimer);
+        sidebarConfigPersistTimer = setTimeout(() => {
+            saveSidebarConfig(window.localStorage, $sidebarConfig);
+            try {
+                window.localStorage.setItem(SIDEBAR_LOCAL_UPDATED_KEY, String(Date.now()));
+            } catch {
+                void 0;
+            }
+        }, 300);
+        scheduleRemoteSidebarConfigSave($sidebarConfig);
+    }
+
+    function handleMoveSidebarItem(payload: SidebarMovePayload) {
+        sidebarConfig.update((current) => moveSidebarItem(current, payload));
+    }
+
+    function handleCreateSidebarGroup(payload: { itemId: SidebarItemId; fromGroupId: string; title?: string }) {
+        sidebarConfig.update((current) => {
+            const { config, groupId } = addSidebarGroup(current, payload.title || '');
+            return moveSidebarItem(config, {
+                itemId: payload.itemId,
+                fromGroupId: payload.fromGroupId,
+                toGroupId: groupId,
+                toIndex: config.groups.find((group) => group.id === groupId)?.items.length ?? 0
+            });
+        });
+    }
+
+    function handleToggleSidebarGroup(groupId: string) {
+        sidebarConfig.update((current) => {
+            const currentGroup = current.groups.find((group) => group.id === groupId);
+            const nextCollapsed = currentGroup ? !currentGroup.collapsed : false;
+            return setSidebarGroupCollapsed(current, groupId, nextCollapsed);
+        });
+    }
+
+    function handleResetSidebarConfig() {
+        if (typeof window !== 'undefined') clearSidebarConfig(window.localStorage);
+        sidebarConfig.set(getDefaultSidebarConfig());
+    }
+
+    function handleTidySidebarConfig() {
+        sidebarConfig.update((current) => tidySidebarConfig(current));
+    }
 
     function scheduleSidebarAutoCollapse() {
         if (sidebarIdleTimer) clearTimeout(sidebarIdleTimer);
@@ -392,19 +588,35 @@
     function collapseSidebar(isAuto = false) {
         if (!sidebarCollapsed) lastExpandedPanel = expandedPanel;
         sidebarCollapsed = true;
-        expandedPanel = null;
+        if (activeWindow == null) expandedPanel = null;
         if (!isAuto) registerSidebarActivity();
     }
 
-    function togglePanel(view: 'health' | 'autoheal' | 'gde') {
-        if (sidebarCollapsed) {
-            expandSidebar();
-            activeView = view;
-            expandedPanel = view;
-            return;
-        }
+    function openViewWindow(view: 'autoheal' | 'gde') {
+        if (sidebarCollapsed) expandSidebar();
         activeView = view;
-        expandedPanel = expandedPanel === view ? null : view;
+        expandedPanel = view;
+        if (view === 'autoheal') {
+            activeWindow = 'status';
+            statusAutohealTab = 'autoheal';
+        } else {
+            activeWindow = view;
+        }
+        registerSidebarActivity();
+    }
+
+    function openStatusWindow() {
+        if (sidebarCollapsed) expandSidebar();
+        activeWindow = 'status';
+        activeView = null;
+        statusAutohealTab = 'status';
+        registerSidebarActivity();
+    }
+
+    function closeActiveWindow() {
+        activeWindow = null;
+        expandedPanel = null;
+        activeView = null;
         registerSidebarActivity();
     }
 
@@ -425,32 +637,29 @@
         registerSidebarActivity();
     }
 
-    function toggleStatusPanel() {
-        statusPanelExpanded = !statusPanelExpanded;
-        registerSidebarActivity();
-    }
-
-    function openDiagnosticPanel() {
-        expandSidebar();
-        activeView = isOffline ? 'health' : isDegraded ? 'autoheal' : 'health';
-        expandedPanel = activeView;
-        registerSidebarActivity();
-    }
-
     /**
      * Health check with exponential backoff $\Delta t_n=\min(\Delta t_0 2^{n-1}, \Delta t_{max})$.
      * Parameters: $\Delta t_0=5000$ ms, $\Delta t_{max}=60000$ ms.
      */
     function setOfflineTelemetry() {
-        serviceStatus.set({ postgres: 'unknown', redis: 'unknown' });
+        updateHealthState({
+            apiOk: false,
+            apiLatencyMs: null,
+            services: { postgres: 'unknown', redis: 'unknown' },
+            threads: { crawler: 'unknown', analyzer: 'unknown', cleanup: 'unknown' }
+        });
         backendThreadStatus.set({ crawler: 'unknown', analyzer: 'unknown', cleanup: 'unknown' });
     }
 
     async function checkSystemHealth() {
         if (isStaticMode()) {
-            apiOk = false;
-            apiLatencyMs = null;
-            healthUpdatedAt = Date.now();
+            updateHealthState({
+                apiOk: false,
+                apiLatencyMs: null,
+                updatedAt: Date.now(),
+                services: { postgres: 'unknown', redis: 'unknown' },
+                threads: { crawler: 'unknown', analyzer: 'unknown', cleanup: 'unknown' }
+            });
             systemStatus.set('STATIC');
             return;
         }
@@ -460,12 +669,17 @@
         try {
             const apiBase = resolveApiBase();
             const response = await fetch(`${apiBase}/health/full`, { signal: controller.signal });
-            apiOk = response.ok;
-            apiLatencyMs = Math.max(0, Date.now() - startedAt);
+            const nextApiOk = response.ok;
+            const nextApiLatencyMs = Math.max(0, Date.now() - startedAt);
             if (response.ok) {
                 const data = await response.json();
-                if (data.services) serviceStatus.set(data.services);
-                if (data.threads) backendThreadStatus.set(data.threads);
+                if (data.services) {
+                    updateHealthState({ services: data.services });
+                }
+                if (data.threads) {
+                    updateHealthState({ threads: data.threads });
+                    backendThreadStatus.set(data.threads);
+                }
 
                 if (data.status === 'ok') {
                     systemStatus.set('ONLINE');
@@ -482,16 +696,18 @@
                 systemStatus.set('OFFLINE');
                 retryCount++;
             }
+            updateHealthState({
+                apiOk: nextApiOk,
+                apiLatencyMs: nextApiLatencyMs
+            });
         } catch (error) {
             console.warn('Health check failed:', error);
-            apiOk = false;
-            apiLatencyMs = null;
             setOfflineTelemetry();
             systemStatus.set('OFFLINE');
             retryCount++;
         } finally {
             clearTimeout(abortTimer);
-            healthUpdatedAt = Date.now();
+            updateHealthState({ updatedAt: Date.now() });
             setTimeout(() => {
                 isLoading = false;
             }, 500);
@@ -691,6 +907,7 @@
             if (res.ok) {
                 const data = await res.json();
                 if (data.threads) {
+                    updateHealthState({ threads: data.threads });
                     backendThreadStatus.set(data.threads);
                 }
             }
@@ -732,10 +949,43 @@
     let crawlerMessage = '';
 
     onMount(() => {
+        if (typeof window !== 'undefined') {
+            const storedSidebarConfig = loadSidebarConfig(window.localStorage);
+            if (storedSidebarConfig) {
+                sidebarConfig.set(storedSidebarConfig);
+            } else {
+                sidebarConfig.set(getDefaultSidebarConfig());
+            }
+            if (!isStaticMode()) {
+                const localUpdated = Number(window.localStorage.getItem(SIDEBAR_LOCAL_UPDATED_KEY) || '0') || 0;
+                const remoteUpdated = Number(window.localStorage.getItem(SIDEBAR_REMOTE_UPDATED_KEY) || '0') || 0;
+                const baseline = Math.max(localUpdated, remoteUpdated);
+                const abort = new AbortController();
+                sidebarConfigRemoteAbort = abort;
+                fetchRemoteSidebarConfig(resolveApiBase(), fetch, abort.signal)
+                    .then((remote) => {
+                        if (!remote || !remote.config || remote.updatedAtMs == null) return;
+                        if (remote.updatedAtMs <= baseline) return;
+                        sidebarConfig.set(tidySidebarConfig(remote.config));
+                        try {
+                            window.localStorage.setItem(SIDEBAR_REMOTE_UPDATED_KEY, String(remote.updatedAtMs));
+                        } catch {
+                            void 0;
+                        }
+                    })
+                    .catch(() => void 0);
+            }
+        }
+        handleLegacyHealthRedirect();
         if (isStaticMode()) {
             const sources = (DATA as unknown as { MEDIA_SOURCES?: unknown }).MEDIA_SOURCES;
             totalSources = Array.isArray(sources) ? sources.length : 0;
             systemStatus.set('STATIC');
+            updateHealthState({
+                apiOk: false,
+                apiLatencyMs: null,
+                updatedAt: Date.now()
+            });
         }
         checkSystemHealth();
         if (!isStaticMode()) webSocketService.connect();
@@ -762,23 +1012,17 @@
 
             const key = e.key.toLowerCase();
             if (key === 'h') {
-                activeView = 'health';
-                expandedPanel = 'health';
-                expandSidebar();
+                openStatusWindow();
                 e.preventDefault();
                 return;
             }
             if (key === 'a') {
-                activeView = 'autoheal';
-                expandedPanel = 'autoheal';
-                expandSidebar();
+                openViewWindow('autoheal');
                 e.preventDefault();
                 return;
             }
             if (key === 'g') {
-                activeView = 'gde';
-                expandedPanel = 'gde';
-                expandSidebar();
+                openViewWindow('gde');
                 e.preventDefault();
                 return;
             }
@@ -840,6 +1084,9 @@
 
     onDestroy(() => {
         clearTimeout(healthCheckTimer);
+        if (sidebarConfigPersistTimer) clearTimeout(sidebarConfigPersistTimer);
+        if (sidebarConfigRemotePersistTimer) clearTimeout(sidebarConfigRemotePersistTimer);
+        if (sidebarConfigRemoteAbort) sidebarConfigRemoteAbort.abort();
     });
 </script>
 
@@ -850,313 +1097,461 @@
         </div>
     {/if}
 
-    {#if $isSetupWizardOpen}
-      <SetupWizard onClose={() => isSetupWizardOpen.set(false)} />
+    {#if toastMessage}
+        <div class="fixed right-6 bottom-6 z-[10001]">
+            <div class="sidebar-panel-sub border sidebar-border px-3 py-2 rounded text-[11px] font-mono tracking-widest text-slate-200 shadow-lg">
+                {toastMessage}
+            </div>
+        </div>
     {/if}
 
-    <!-- Setup Trigger Button (Bottom Right) -->
-    <div class="fixed bottom-6 right-6 z-40">
-       <button 
-         class="bg-cyan-600 hover:bg-cyan-500 text-white p-4 rounded-full shadow-lg shadow-cyan-900/50 transition-all hover:scale-110 flex items-center gap-2"
-         on:click={() => isSetupWizardOpen.set(true)}
-         title="Open Setup Wizard"
-       >
-         <span class="text-xl">🚀</span>
-         <span class="font-bold hidden group-hover:block">Setup</span>
-       </button>
-    </div>
-
-    <div class="h-full min-h-0 relative">
-        <section class="absolute inset-0 bg-slate-950">
-            <MapContainer />
-        </section>
-
-        <Sidebar
-            bind:sidebarCollapsed
-            bind:expandedPanel
-            bind:activeView
-            bind:statusPanelExpanded
-            {totalSources}
-            {healthUpdatedAt}
-            {uiNow}
-            {apiOk}
-            {apiLatencyMs}
-            {isSystemCritical}
-            {isOffline}
-            onExpand={expandSidebar}
-            onCollapse={() => collapseSidebar(false)}
-            onTogglePanel={togglePanel}
-            onToggleStatusPanel={toggleStatusPanel}
-            onOpenDiagnostic={openDiagnosticPanel}
-            onHover={setSidebarHovering}
-            onScroll={handleSidebarScroll}
-            onActivity={registerSidebarActivity}
-        >
-            <div slot="gde-content" class="space-y-2">
-                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
-                    <div class="flex items-center justify-between">
-                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                            <span class="material-icons-round text-[16px] sidebar-icon-muted">schedule</span>
-                            <span>Window</span>
-                        </span>
-                        <span class="font-mono sidebar-text-quiet">{gdeWindowHours}h</span>
-                    </div>
-                    <div class="flex flex-wrap gap-1">
-                        {#each gdeWindowOptions as hours (hours)}
-                            <button
-                                type="button"
-                                class={`px-2 py-0.5 rounded border sidebar-border text-[10px] font-mono tracking-widest ${gdeWindowHours === hours ? 'sidebar-active sidebar-text' : 'sidebar-panel-sub sidebar-text-muted'}`}
-                                on:click={() => setGdeWindow(hours)}
-                            >
-                                {hours}h
-                            </button>
-                        {/each}
-                    </div>
+    <div class="h-full min-h-0 flex flex-col">
+        <header class="h-12 shrink-0 flex items-center gap-3 px-3 border-b sidebar-border sidebar-theme sidebar-panel">
+            <div class="flex items-center gap-2 min-w-0">
+                <div class="h-8 w-8 rounded-[6px] border sidebar-border sidebar-panel-sub flex items-center justify-center">
+                    <span class="material-icons-round text-[18px] sidebar-icon-muted">public</span>
                 </div>
-                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
-                    <div class="flex items-center justify-between">
-                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                            <span class="material-icons-round text-[16px] sidebar-icon-muted">tune</span>
-                            <span>Alpha</span>
-                        </span>
-                        <span class="font-mono sidebar-text-quiet">{gdeAlpha.toFixed(2)}</span>
-                    </div>
-                    <div class="flex flex-wrap gap-1">
-                        {#each gdeAlphaOptions as alpha (alpha)}
-                            <button
-                                type="button"
-                                class={`px-2 py-0.5 rounded border sidebar-border text-[10px] font-mono tracking-widest ${gdeAlpha === alpha ? 'sidebar-active sidebar-text' : 'sidebar-panel-sub sidebar-text-muted'}`}
-                                on:click={() => setGdeAlpha(alpha)}
-                            >
-                                α {alpha.toFixed(1)}
-                            </button>
-                        {/each}
-                    </div>
-                </div>
-                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
-                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                        <span class="material-icons-round text-[16px] sidebar-icon-muted">public</span>
-                        <span>GDE</span>
-                    </span>
-                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.gde)}</span>
-                </div>
-                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
-                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                        <span class="material-icons-round text-[16px] sidebar-icon-muted">tag</span>
-                        <span>Entropy (H_norm)</span>
-                    </span>
-                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.normalized_shannon)}</span>
-                </div>
-                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
-                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                        <span class="material-icons-round text-[16px] sidebar-icon-muted">scatter_plot</span>
-                        <span>Dispersion (D_norm)</span>
-                    </span>
-                    <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.normalized_dispersion)}</span>
-                </div>
-                <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
-                    <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                        <span class="material-icons-round text-[16px] sidebar-icon-muted">grid_view</span>
-                        <span>Coverage</span>
-                    </span>
-                    <span class="font-mono sidebar-text-quiet">{gdeMetrics ? `${gdeMetrics.country_count}/${gdeMetrics.total_visits}` : '—'}</span>
-                </div>
-                <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
-                    <div class="flex items-center justify-between">
-                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
-                            <span class="material-icons-round text-[16px] sidebar-icon-muted">trending_up</span>
-                            <span>Net Growth</span>
-                        </span>
-                        <span class="font-mono sidebar-text-quiet">{growthLatest?.day || '—'}</span>
-                    </div>
-                    <div class="grid grid-cols-2 gap-2 text-[10px] font-mono sidebar-text-quiet">
-                        <div class="flex items-center justify-between rounded sidebar-panel-sub border sidebar-border px-2 py-1">
-                            <span>Media</span>
-                            <span>{growthLatest ? `${growthLatest.media_sources_net}` : '—'}</span>
-                        </div>
-                        <div class="flex items-center justify-between rounded sidebar-panel-sub border sidebar-border px-2 py-1">
-                            <span>Candidate</span>
-                            <span>{growthLatest ? formatPercent(growthLatest.candidate_sources_growth_rate) : '—'}</span>
-                        </div>
-                    </div>
+                <div class="min-w-0 leading-tight">
+                    <div class="text-[11px] font-semibold tracking-widest sidebar-text">GMP</div>
+                    <div class="text-[10px] sidebar-text-dim">World Map Console</div>
                 </div>
             </div>
 
-            <div slot="health-header-actions">
+            <div class="flex-1 min-w-0 flex items-center justify-center gap-2">
+                <div class="px-2 py-1 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono sidebar-text-muted flex items-center gap-2">
+                    <span class="material-icons-round text-[14px] sidebar-icon-muted">public</span>
+                    <span>SRC</span>
+                    <span class="sidebar-text-quiet">{formatBigNumber(totalSources)}</span>
+                </div>
+                <div class="px-2 py-1 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono sidebar-text-muted flex items-center gap-2">
+                    <span class="material-icons-round text-[14px] sidebar-icon-muted">monitor_heart</span>
+                    <span>{$systemStatus}</span>
+                </div>
+                <div class="px-2 py-1 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono sidebar-text-muted flex items-center gap-2">
+                    <span class="material-icons-round text-[14px] sidebar-icon-muted">bolt</span>
+                    <span>{apiOk ? `OK${apiLatencyMs != null ? ` ${apiLatencyMs}ms` : ''}` : 'DOWN'}</span>
+                </div>
+                <div class="px-2 py-1 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono sidebar-text-muted flex items-center gap-2">
+                    <span class="material-icons-round text-[14px] sidebar-icon-muted">wifi</span>
+                    <span>{$isConnected ? 'CONNECTED' : 'DISCONNECTED'}</span>
+                </div>
+                <div class="px-2 py-1 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono sidebar-text-muted flex items-center gap-2">
+                    <span class="material-icons-round text-[14px] sidebar-icon-muted">schedule</span>
+                    <span>{formatAgeSeconds(healthUpdatedAt, uiNow)}</span>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2">
                 <button
-                    type="button"
-                    class="px-2 py-0.5 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted"
-                    on:click={() => { healthDetailExpanded = !healthDetailExpanded; }}
+                    class="h-8 px-2 rounded-[6px] border sidebar-border sidebar-panel-sub flex items-center gap-1 text-[10px] font-mono sidebar-text-muted sidebar-hoverable sidebar-focusable"
+                    on:click={openStatusWindow}
+                    title="Status & Autoheal"
                 >
-                    {healthDetailExpanded ? 'Detail' : 'Summary'}
+                    <span class="material-icons-round text-[14px]">monitor_heart</span>
+                    <span>Status</span>
+                </button>
+                <button
+                    class="h-8 px-2 rounded-[6px] border sidebar-border sidebar-panel-sub flex items-center gap-1 text-[10px] font-mono sidebar-text-muted sidebar-hoverable sidebar-focusable"
+                    on:click={() => openViewWindow('autoheal')}
+                    title="Autoheal"
+                >
+                    <span class="material-icons-round text-[14px]">shield</span>
+                    <span>Autoheal</span>
+                </button>
+                <button
+                    class="h-8 px-2 rounded-[6px] border sidebar-border sidebar-panel-sub flex items-center gap-1 text-[10px] font-mono sidebar-text-muted sidebar-hoverable sidebar-focusable"
+                    on:click={() => openViewWindow('gde')}
+                    title="GDE Metrics"
+                >
+                    <span class="material-icons-round text-[14px]">insights</span>
+                    <span>GDE</span>
+                </button>
+                <button
+                    class="h-8 px-2 rounded-[6px] border sidebar-border sidebar-panel-sub flex items-center gap-1 text-[10px] font-mono sidebar-text-muted sidebar-hoverable sidebar-focusable"
+                    on:click={() => emitMapCommand('reset_view')}
+                    title="Reset Map View"
+                >
+                    <span class="material-icons-round text-[14px]">my_location</span>
+                    <span>Reset</span>
                 </button>
             </div>
+        </header>
 
-            <div slot="health-content" class="space-y-2">
-                <div class="grid grid-cols-2 gap-2">
-                    <div class="grid grid-cols-[1fr_auto] items-center sidebar-panel-sub border sidebar-border p-2 rounded">
-                        <span class="sidebar-text-dim font-mono flex items-center gap-1">
-                            <span class="material-icons-round text-[14px] sidebar-icon-dim">storage</span>
-                            <span>POSTGRES</span>
-                        </span>
-                        <span class="font-mono {getStatusColor($serviceStatus.postgres)}">{$serviceStatus.postgres?.toUpperCase() || 'UNK'}</span>
-                    </div>
-                    <div class="grid grid-cols-[1fr_auto] items-center sidebar-panel-sub border sidebar-border p-2 rounded">
-                        <span class="sidebar-text-dim font-mono flex items-center gap-1">
-                            <span class="material-icons-round text-[14px] sidebar-icon-dim">memory</span>
-                            <span>REDIS</span>
-                        </span>
-                        <span class="font-mono {getStatusColor($serviceStatus.redis)}">{$serviceStatus.redis?.toUpperCase() || 'UNK'}</span>
-                    </div>
-                </div>
-                {#if healthDetailExpanded}
-                    <div>
-                        <div class="text-[10px] font-mono sidebar-text-dim tracking-widest mb-2 flex items-center gap-2">
-                            <span class="material-icons-round text-[14px] sidebar-icon-dim">route</span>
-                            <span>Threads</span>
+        <div class="flex-1 min-h-0 relative">
+            <section class="absolute inset-0 bg-slate-950">
+                <MapContainer />
+            </section>
+
+            <Sidebar
+                bind:sidebarCollapsed
+                bind:expandedPanel
+                bind:activeView
+                statusPanelExpanded={activeWindow === 'status'}
+                sidebarConfig={sidebarConfigTyped}
+                {totalSources}
+                {healthUpdatedAt}
+                {uiNow}
+                {apiOk}
+                {apiLatencyMs}
+                {isSystemCritical}
+                {isOffline}
+                onExpand={expandSidebar}
+                onCollapse={() => collapseSidebar(false)}
+                onTogglePanel={openViewWindow}
+                onToggleStatusPanel={openStatusWindow}
+                onHover={setSidebarHovering}
+                onScroll={handleSidebarScroll}
+                onActivity={registerSidebarActivity}
+                onMoveSidebarItem={handleMoveSidebarItem}
+                onCreateSidebarGroup={handleCreateSidebarGroup}
+                onToggleSidebarGroup={handleToggleSidebarGroup}
+                onResetSidebarConfig={handleResetSidebarConfig}
+                onTidySidebarConfig={handleTidySidebarConfig}
+            />
+
+            {#if activeWindow === 'status'}
+                <FloatingWindow
+                    windowKey="status"
+                    title="Status & Autoheal"
+                    subtitle="Health, safety & recovery"
+                    icon="monitor_heart"
+                    onClose={closeActiveWindow}
+                    windowActions={[{ key: 'close', label: 'Close', onClick: closeActiveWindow }]}
+                    tabs={[{ key: 'status', label: 'Status' }, { key: 'autoheal', label: 'Autoheal' }]}
+                    initialActiveTab={statusAutohealTab}
+                    bind:activeTabKey={statusAutohealTab}
+                    let:activeTab
+                >
+                    {#if activeTab === 'status'}
+                    <div class="space-y-3">
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                                <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                    <span class="material-icons-round text-[16px] sidebar-icon-muted">public</span>
+                                    <span>SRC</span>
+                                </span>
+                                <span class="font-mono sidebar-text-quiet">{formatBigNumber(totalSources)}</span>
+                            </div>
+                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                                <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                    <span class="material-icons-round text-[16px] sidebar-icon-muted">wifi</span>
+                                    <span>WS</span>
+                                </span>
+                                <span class="font-mono {$isConnected ? 'status-text-ok' : 'status-text-error'}">{$isConnected ? 'CONNECTED' : 'DISCONNECTED'}</span>
+                            </div>
+                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                                <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                    <span class="material-icons-round text-[16px] sidebar-icon-muted">monitor_heart</span>
+                                    <span>System</span>
+                                </span>
+                                <span class="font-mono {getStatusColor($systemStatus)}">{$systemStatus}</span>
+                            </div>
+                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                                <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                    <span class="material-icons-round text-[16px] sidebar-icon-muted">bolt</span>
+                                    <span>API</span>
+                                </span>
+                                <span class="font-mono {apiOk ? 'status-text-ok' : 'status-text-error'}">{apiOk ? `OK${apiLatencyMs != null ? ` ${apiLatencyMs}ms` : ''}` : 'DOWN'}</span>
+                            </div>
                         </div>
-                        <div class="grid grid-cols-3 gap-2">
-                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
-                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
-                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">travel_explore</span>
+
+                        <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                            <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                <span class="material-icons-round text-[16px] sidebar-icon-muted">schedule</span>
+                                <span>Health Age</span>
+                            </span>
+                            <span class="font-mono sidebar-text-quiet">{formatAgeSeconds(healthUpdatedAt, uiNow)}</span>
+                        </div>
+
+                        <div class="sidebar-panel-sub border sidebar-border rounded overflow-hidden">
+                            <div class="px-2 py-1 border-b sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted flex items-center gap-2">
+                                <span class="material-icons-round text-[14px] sidebar-icon-muted">terminal</span>
+                                <span>Logs</span>
+                            </div>
+                            <div class="p-2 max-h-[360px] overflow-auto text-[10px] font-mono sidebar-text-quiet space-y-1">
+                                {#if !$systemLogs?.length}
+                                    <div class="sidebar-text-muted">No logs yet.</div>
+                                {:else}
+                                    {#each $systemLogs.slice(0, 50) as entry, idx (idx)}
+                                        <div class="whitespace-pre-wrap break-words">{typeof entry === 'string' ? entry : JSON.stringify(entry)}</div>
+                                    {/each}
+                                {/if}
+                            </div>
+                        </div>
+
+                        <div class="sidebar-panel-sub border sidebar-border rounded overflow-hidden">
+                            <div class="px-2 py-1 border-b sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted flex items-center gap-2">
+                                <span class="material-icons-round text-[14px] sidebar-icon-muted">storage</span>
+                                <span>Services</span>
+                            </div>
+                            <div class="p-2 grid grid-cols-2 gap-2">
+                                <div class="grid grid-cols-[1fr_auto] items-center sidebar-panel-sub border sidebar-border p-2 rounded">
+                                    <span class="sidebar-text-dim font-mono flex items-center gap-1">
+                                        <span class="material-icons-round text-[14px] sidebar-icon-dim">storage</span>
+                                        <span>POSTGRES</span>
+                                    </span>
+                                    <span class="font-mono {getStatusColor($statusStore.health.services.postgres)}">{$statusStore.health.services.postgres?.toUpperCase() || 'UNK'}</span>
+                                </div>
+                                <div class="grid grid-cols-[1fr_auto] items-center sidebar-panel-sub border sidebar-border p-2 rounded">
+                                    <span class="sidebar-text-dim font-mono flex items-center gap-1">
+                                        <span class="material-icons-round text-[14px] sidebar-icon-dim">memory</span>
+                                        <span>REDIS</span>
+                                    </span>
+                                    <span class="font-mono {getStatusColor($statusStore.health.services.redis)}">{$statusStore.health.services.redis?.toUpperCase() || 'UNK'}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="sidebar-panel-sub border sidebar-border rounded overflow-hidden">
+                            <div class="px-2 py-1 border-b sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted flex items-center gap-2">
+                                <span class="material-icons-round text-[14px] sidebar-icon-muted">route</span>
+                                <span>Threads</span>
+                            </div>
+                            <div class="p-2 grid grid-cols-3 gap-2">
+                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
+                                    <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
+                                        <span class="material-icons-round text-[14px] sidebar-icon-muted">travel_explore</span>
+                                        <span>Crawler</span>
+                                    </div>
+                                    <div class="font-mono {getThreadStatusColor($statusStore.health.threads.crawler)}">{$statusStore.health.threads.crawler?.toUpperCase() || 'UNK'}</div>
+                                </div>
+                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
+                                    <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
+                                        <span class="material-icons-round text-[14px] sidebar-icon-muted">analytics</span>
+                                        <span>Analyzer</span>
+                                    </div>
+                                    <div class="font-mono {getThreadStatusColor($statusStore.health.threads.analyzer)}">{$statusStore.health.threads.analyzer?.toUpperCase() || 'UNK'}</div>
+                                </div>
+                                <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
+                                    <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
+                                        <span class="material-icons-round text-[14px] sidebar-icon-muted">delete_sweep</span>
+                                        <span>Cleanup</span>
+                                    </div>
+                                    <div class="font-mono {getThreadStatusColor($statusStore.health.threads.cleanup)}">{$statusStore.health.threads.cleanup?.toUpperCase() || 'UNK'}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                {:else if activeTab === 'autoheal'}
+                    <div class="space-y-3">
+                        <div class="rounded sidebar-panel-soft border sidebar-border p-3">
+                            <div class="flex items-center justify-between">
+                                <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-2">
+                                    <span class="material-icons-round text-[16px] sidebar-icon-muted">shield</span>
+                                    <span>Safety</span>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        class="px-2 py-0.5 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted sidebar-focusable"
+                                        on:click={() => { autohealDetailExpanded = !autohealDetailExpanded; }}
+                                    >
+                                        {autohealDetailExpanded ? 'Detail' : 'Summary'}
+                                    </button>
+                                    {#if isDegraded}
+                                        <span class="px-2 py-0.5 rounded border border-yellow-500/40 bg-yellow-500/10 text-yellow-200 text-[10px] font-mono tracking-widest flex items-center gap-1">
+                                            <span class="material-icons-round text-[14px] text-yellow-200">warning_amber</span>
+                                            <span>DEGRADED</span>
+                                        </span>
+                                    {/if}
+                                    <button
+                                        class="px-2 py-1 rounded border text-[10px] font-mono tracking-widest disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 sidebar-focusable {safetyArmed ? 'border-red-500/40 bg-red-500/10 text-red-200' : 'sidebar-panel-sub sidebar-border sidebar-text'}"
+                                        on:click={toggleSafety}
+                                        disabled={isOffline}
+                                        aria-pressed={safetyArmed}
+                                        title={isOffline ? 'Offline: Controls locked' : safetyArmed ? 'Disarm high-risk controls' : 'Arm high-risk controls'}
+                                    >
+                                        <span class="material-icons-round text-[14px]">{safetyArmed ? 'lock_open' : 'lock'}</span>
+                                        {safetyArmed ? 'ARMED' : 'SAFE'}
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="mt-2 text-[11px] sidebar-text-dim font-mono">
+                                {#if isOffline}
+                                    OFFLINE LOCK
+                                {:else if safetyArmed}
+                                    High-risk actions enabled.
+                                {:else}
+                                    High-risk actions blocked.
+                                {/if}
+                            </div>
+                        </div>
+
+                        {#if autohealDetailExpanded}
+                            <div class="rounded sidebar-panel-soft border sidebar-border p-3">
+                                <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted mb-2 flex items-center gap-2">
+                                    <span class="material-icons-round text-[16px] sidebar-icon-muted">travel_explore</span>
                                     <span>Crawler</span>
                                 </div>
-                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</div>
-                            </div>
-                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
-                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
-                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">analytics</span>
-                                    <span>Analyzer</span>
+                                <div class="grid grid-cols-3 gap-2 mb-2">
+                                    <button
+                                        class="px-2 py-2 rounded border border-emerald-500/30 hover:bg-emerald-500/10 text-emerald-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1 sidebar-focusable"
+                                        on:click={() => runHighRisk('crawler START', () => controlCrawler('start'))}
+                                        disabled={isCrawlerLoading || isOffline || !safetyArmed || $backendThreadStatus.crawler === 'running'}
+                                    >
+                                        <span class="material-icons-round text-[16px]">play_arrow</span>
+                                        <span>Start</span>
+                                    </button>
+                                    <button
+                                        class="px-2 py-2 rounded border border-red-500/30 hover:bg-red-500/10 text-red-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1 sidebar-focusable"
+                                        on:click={() => runHighRisk('crawler STOP', () => controlCrawler('stop'))}
+                                        disabled={isCrawlerLoading || isOffline || !safetyArmed || $backendThreadStatus.crawler !== 'running'}
+                                    >
+                                        <span class="material-icons-round text-[16px]">stop</span>
+                                        <span>Stop</span>
+                                    </button>
+                                    <button
+                                        class="px-2 py-2 rounded border border-amber-500/30 hover:bg-amber-500/10 text-amber-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1 sidebar-focusable"
+                                        on:click={() => runHighRisk('crawler RESTART', () => controlCrawler('restart'))}
+                                        disabled={isCrawlerLoading || isOffline || !safetyArmed}
+                                    >
+                                        <span class="material-icons-round text-[16px]">restart_alt</span>
+                                        <span>Restart</span>
+                                    </button>
                                 </div>
-                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.analyzer)}">{$backendThreadStatus.analyzer?.toUpperCase() || 'UNK'}</div>
-                            </div>
-                            <div class="sidebar-panel-sub border sidebar-border p-2 rounded">
-                                <div class="text-[10px] sidebar-text-muted flex items-center gap-1">
-                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">delete_sweep</span>
-                                    <span>Cleanup</span>
+                                <div class="text-[10px] font-mono sidebar-text-dim sidebar-panel-sub border sidebar-border p-2 rounded min-h-[32px]">
+                                    {#if isCrawlerLoading}
+                                        Processing…
+                                    {:else}
+                                        {crawlerMessage || 'Ready.'}
+                                    {/if}
                                 </div>
-                                <div class="font-mono {getThreadStatusColor($backendThreadStatus.cleanup)}">{$backendThreadStatus.cleanup?.toUpperCase() || 'UNK'}</div>
                             </div>
-                        </div>
-                    </div>
-                {/if}
-            </div>
 
-            <div slot="autoheal-content" class="space-y-3">
-                <div class="rounded sidebar-panel-soft border sidebar-border p-3">
-                    <div class="flex items-center justify-between">
-                        <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-2">
-                            <span class="material-icons-round text-[16px] sidebar-icon-muted">shield</span>
-                            <span>Safety</span>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <button
-                                type="button"
-                                class="px-2 py-0.5 rounded sidebar-panel-sub border sidebar-border text-[10px] font-mono tracking-widest sidebar-text-muted"
-                                on:click={() => { autohealDetailExpanded = !autohealDetailExpanded; }}
-                            >
-                                {autohealDetailExpanded ? 'Detail' : 'Summary'}
-                            </button>
-                            {#if isDegraded}
-                                <span class="px-2 py-0.5 rounded border border-yellow-500/40 bg-yellow-500/10 text-yellow-200 text-[10px] font-mono tracking-widest flex items-center gap-1">
-                                    <span class="material-icons-round text-[14px] text-yellow-200">warning_amber</span>
-                                    <span>DEGRADED</span>
-                                </span>
-                            {/if}
-                            <button
-                                class="px-2 py-1 rounded border text-[10px] font-mono tracking-widest disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 {safetyArmed ? 'border-red-500/40 bg-red-500/10 text-red-200' : 'sidebar-panel-sub sidebar-border sidebar-text'}"
-                                on:click={toggleSafety}
-                                disabled={isOffline}
-                                aria-pressed={safetyArmed}
-                                title={isOffline ? 'Offline: Controls locked' : safetyArmed ? 'Disarm high-risk controls' : 'Arm high-risk controls'}
-                            >
-                                <span class="material-icons-round text-[14px]">{safetyArmed ? 'lock_open' : 'lock'}</span>
-                                {safetyArmed ? 'ARMED' : 'SAFE'}
-                            </button>
-                        </div>
-                    </div>
-                    <div class="mt-2 text-[11px] sidebar-text-dim font-mono">
-                        {#if isOffline}
-                            OFFLINE LOCK
-                        {:else if safetyArmed}
-                            High-risk actions enabled.
+                            <div class="rounded sidebar-panel-soft border sidebar-border p-3">
+                                <div class="flex items-center justify-between">
+                                    <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-2">
+                                        <span class="material-icons-round text-[16px] sidebar-icon-muted">auto_fix_high</span>
+                                        <span>Autoheal</span>
+                                    </div>
+                                    <button
+                                        class="px-2 py-1 rounded border border-amber-500/30 hover:bg-amber-500/10 text-amber-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 sidebar-focusable"
+                                        on:click={() => runHighRisk('autoheal FORCE', triggerHeal)}
+                                        disabled={isCrawlerLoading || isOffline || !safetyArmed}
+                                    >
+                                        <span class="material-icons-round text-[14px]">bolt</span>
+                                        Force
+                                    </button>
+                                </div>
+                                <div class="mt-2 text-[11px] sidebar-text-dim">
+                                    Crawler: <span class="{getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</span>
+                                </div>
+                            </div>
                         {:else}
-                            High-risk actions blocked.
+                            <div class="rounded sidebar-panel-sub border sidebar-border p-2 flex items-center justify-between text-[10px] font-mono">
+                                <span class="sidebar-text-muted flex items-center gap-2">
+                                    <span class="material-icons-round text-[14px] sidebar-icon-muted">travel_explore</span>
+                                    <span>Crawler</span>
+                                </span>
+                                <span class="{getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</span>
+                            </div>
                         {/if}
                     </div>
-                </div>
-
-                {#if autohealDetailExpanded}
-                    <div class="rounded sidebar-panel-soft border sidebar-border p-3">
-                        <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted mb-2 flex items-center gap-2">
-                            <span class="material-icons-round text-[16px] sidebar-icon-muted">travel_explore</span>
-                            <span>Crawler</span>
-                        </div>
-                        <div class="grid grid-cols-3 gap-2 mb-2">
-                            <button
-                                class="px-2 py-2 rounded border border-emerald-500/30 hover:bg-emerald-500/10 text-emerald-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
-                                on:click={() => runHighRisk('crawler START', () => controlCrawler('start'))}
-                                disabled={isCrawlerLoading || isOffline || !safetyArmed || $backendThreadStatus.crawler === 'running'}
-                            >
-                                <span class="material-icons-round text-[16px]">play_arrow</span>
-                                <span>Start</span>
-                            </button>
-                            <button
-                                class="px-2 py-2 rounded border border-red-500/30 hover:bg-red-500/10 text-red-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
-                                on:click={() => runHighRisk('crawler STOP', () => controlCrawler('stop'))}
-                                disabled={isCrawlerLoading || isOffline || !safetyArmed || $backendThreadStatus.crawler !== 'running'}
-                            >
-                                <span class="material-icons-round text-[16px]">stop</span>
-                                <span>Stop</span>
-                            </button>
-                            <button
-                                class="px-2 py-2 rounded border border-amber-500/30 hover:bg-amber-500/10 text-amber-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
-                                on:click={() => runHighRisk('crawler RESTART', () => controlCrawler('restart'))}
-                                disabled={isCrawlerLoading || isOffline || !safetyArmed}
-                            >
-                                <span class="material-icons-round text-[16px]">restart_alt</span>
-                                <span>Restart</span>
-                            </button>
-                        </div>
-                        <div class="text-[10px] font-mono sidebar-text-dim sidebar-panel-sub border sidebar-border p-2 rounded min-h-[32px]">
-                            {#if isCrawlerLoading}
-                                Processing…
-                            {:else}
-                                {crawlerMessage || 'Ready.'}
-                            {/if}
-                        </div>
-                    </div>
-
-                    <div class="rounded sidebar-panel-soft border sidebar-border p-3">
-                        <div class="flex items-center justify-between">
-                            <div class="text-[10px] font-mono font-semibold tracking-widest sidebar-text-muted flex items-center gap-2">
-                                <span class="material-icons-round text-[16px] sidebar-icon-muted">auto_fix_high</span>
-                                <span>Autoheal</span>
-                            </div>
-                            <button
-                                class="px-2 py-1 rounded border border-amber-500/30 hover:bg-amber-500/10 text-amber-200 text-[10px] font-mono disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                                on:click={() => runHighRisk('autoheal FORCE', triggerHeal)}
-                                disabled={isCrawlerLoading || isOffline || !safetyArmed}
-                            >
-                                <span class="material-icons-round text-[14px]">bolt</span>
-                                Force
-                            </button>
-                        </div>
-                        <div class="mt-2 text-[11px] sidebar-text-dim">
-                            Crawler: <span class="{getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</span>
-                        </div>
-                    </div>
-                {:else}
-                    <div class="rounded sidebar-panel-sub border sidebar-border p-2 flex items-center justify-between text-[10px] font-mono">
-                        <span class="sidebar-text-muted flex items-center gap-2">
-                            <span class="material-icons-round text-[14px] sidebar-icon-muted">travel_explore</span>
-                            <span>Crawler</span>
-                        </span>
-                        <span class="{getThreadStatusColor($backendThreadStatus.crawler)}">{$backendThreadStatus.crawler?.toUpperCase() || 'UNK'}</span>
-                    </div>
                 {/if}
-            </div>
-        </Sidebar>
+            </FloatingWindow>
+        {/if}
+
+        {#if activeWindow === 'gde'}
+            <FloatingWindow
+                windowKey="gde"
+                title="Geographic Diversity Entropy"
+                subtitle="Metrics & tuning"
+                icon="diversity_3"
+                onClose={closeActiveWindow}
+                windowActions={[{ key: 'close', label: 'Close', onClick: closeActiveWindow }]}
+            >
+                <div class="space-y-2">
+                    <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                <span class="material-icons-round text-[16px] sidebar-icon-muted">schedule</span>
+                                <span>Window</span>
+                            </span>
+                            <span class="font-mono sidebar-text-quiet">{gdeWindowHours}h</span>
+                        </div>
+                        <div class="flex flex-wrap gap-1">
+                            {#each gdeWindowOptions as hours (hours)}
+                                <button
+                                    type="button"
+                                    class={`px-2 py-0.5 rounded border sidebar-border text-[10px] font-mono tracking-widest ${gdeWindowHours === hours ? 'sidebar-active sidebar-text' : 'sidebar-panel-sub sidebar-text-muted'}`}
+                                    on:click={() => setGdeWindow(hours)}
+                                >
+                                    {hours}h
+                                </button>
+                            {/each}
+                        </div>
+                    </div>
+                    <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                <span class="material-icons-round text-[16px] sidebar-icon-muted">tune</span>
+                                <span>Alpha</span>
+                            </span>
+                            <span class="font-mono sidebar-text-quiet">{gdeAlpha.toFixed(2)}</span>
+                        </div>
+                        <div class="flex flex-wrap gap-1">
+                            {#each gdeAlphaOptions as alpha (alpha)}
+                                <button
+                                    type="button"
+                                    class={`px-2 py-0.5 rounded border sidebar-border text-[10px] font-mono tracking-widest ${gdeAlpha === alpha ? 'sidebar-active sidebar-text' : 'sidebar-panel-sub sidebar-text-muted'}`}
+                                    on:click={() => setGdeAlpha(alpha)}
+                                >
+                                    α {alpha.toFixed(1)}
+                                </button>
+                            {/each}
+                        </div>
+                    </div>
+                    <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                            <span class="material-icons-round text-[16px] sidebar-icon-muted">public</span>
+                            <span>GDE</span>
+                        </span>
+                        <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.gde)}</span>
+                    </div>
+                    <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                            <span class="material-icons-round text-[16px] sidebar-icon-muted">tag</span>
+                            <span>Entropy (H_norm)</span>
+                        </span>
+                        <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.normalized_shannon)}</span>
+                    </div>
+                    <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                            <span class="material-icons-round text-[16px] sidebar-icon-muted">scatter_plot</span>
+                            <span>Dispersion (D_norm)</span>
+                        </span>
+                        <span class="font-mono sidebar-text-quiet">{formatMetric(gdeMetrics?.normalized_dispersion)}</span>
+                    </div>
+                    <div class="sidebar-panel-sub border sidebar-border p-2 rounded flex items-center justify-between">
+                        <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                            <span class="material-icons-round text-[16px] sidebar-icon-muted">grid_view</span>
+                            <span>Coverage</span>
+                        </span>
+                        <span class="font-mono sidebar-text-quiet">{gdeMetrics ? `${gdeMetrics.country_count}/${gdeMetrics.total_visits}` : '—'}</span>
+                    </div>
+                    <div class="sidebar-panel-sub border sidebar-border p-2 rounded space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="font-mono sidebar-text-muted flex items-center gap-2">
+                                <span class="material-icons-round text-[16px] sidebar-icon-muted">trending_up</span>
+                                <span>Net Growth</span>
+                            </span>
+                            <span class="font-mono sidebar-text-quiet">{growthLatest?.day || '—'}</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 text-[10px] font-mono sidebar-text-quiet">
+                            <div class="flex items-center justify-between rounded sidebar-panel-sub border sidebar-border px-2 py-1">
+                                <span>Media</span>
+                                <span>{growthLatest ? `${growthLatest.media_sources_net}` : '—'}</span>
+                            </div>
+                            <div class="flex items-center justify-between rounded sidebar-panel-sub border sidebar-border px-2 py-1">
+                                <span>Candidate</span>
+                                <span>{growthLatest ? formatPercent(growthLatest.candidate_sources_growth_rate) : '—'}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                </FloatingWindow>
+            {/if}
+        </div>
     </div>
 </main>
 

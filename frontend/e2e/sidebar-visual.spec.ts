@@ -40,10 +40,13 @@ test.describe('Sidebar Visual Regression', () => {
   });
 
   test('should adhere to contrast guidelines', async ({ page }) => {
-      // Basic automated accessibility check using axe-core could go here
-      // For now, we verify specific styling classes
       const sidebar = page.locator('aside.sidebar-shell');
-      await expect(sidebar).toHaveClass(/bg-slate-950/);
-      await expect(sidebar).toHaveClass(/text-slate-100/); // Or inherited text color
+      const styles = await sidebar.evaluate((el) => {
+          const cs = window.getComputedStyle(el);
+          return { backgroundColor: cs.backgroundColor, color: cs.color };
+      });
+      expect(styles.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+      expect(styles.backgroundColor).not.toBe('transparent');
+      expect(styles.color).not.toBe(styles.backgroundColor);
   });
 });

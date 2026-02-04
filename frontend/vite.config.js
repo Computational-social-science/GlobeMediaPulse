@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
+import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
@@ -7,9 +8,15 @@ import path from 'path'
 export default defineConfig({
   plugins: [
     svelte(),
+    react(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+      workbox: {
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true
+      },
       manifest: {
         name: 'GlobeMediaPulse',
         short_name: 'GMP',
@@ -34,14 +41,24 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    strictPort: true
+    strictPort: true,
+    watch: {
+      usePolling: process.env.CHOKIDAR_USEPOLLING === '1'
+    },
+    hmr: process.env.VITE_HMR_HOST || process.env.VITE_HMR_PORT
+      ? {
+          host: process.env.VITE_HMR_HOST || undefined,
+          port: process.env.VITE_HMR_PORT ? Number(process.env.VITE_HMR_PORT) : undefined,
+          clientPort: process.env.VITE_HMR_PORT ? Number(process.env.VITE_HMR_PORT) : undefined
+        }
+      : undefined
   },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
       '@lib': path.resolve(__dirname, './src/lib'),
       '@components': path.resolve(__dirname, './src/lib/components'),
-      '@stores': path.resolve(__dirname, './src/lib/stores.js')
+      '@stores': path.resolve(__dirname, './src/lib/stores.ts')
     }
   }
 })

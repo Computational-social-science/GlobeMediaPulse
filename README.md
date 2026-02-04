@@ -72,27 +72,42 @@ The project adopts a **static-first, zero-cost** architecture for durable publis
 ## 4. Quick Start (Research Environment)
 
 ### Prerequisites
-*   Python 3.11+
-*   Node.js 18+
-*   PostgreSQL & Redis
+*   Docker Desktop
+*   Node.js 20+
+*   Python 3.11+ (optional, for local scripts/tests)
 
-### Installation
+### Installation (Recommended: Docker Compose)
 
-**1. Backend (Intelligence Engine)**
 ```bash
-cd backend
-python -m venv venv
-# Windows: venv\Scripts\activate | Mac/Linux: source venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium  # Install headless browser
-python main.py  # Starts API server on port 8002
+cp .env.example .env
+docker compose up -d --build
 ```
 
-**2. Frontend (Visualization Console)**
+Optional: run frontend dev server in Docker (stable HMR ports for Windows/macOS)
+
 ```bash
-cd frontend
-npm install
-npm run dev
+docker compose --profile dev up -d --build frontend
+```
+
+### Verification
+
+```bash
+python scripts/health_check.py
+```
+
+* Backend health: http://localhost:8000/health/full
+* Frontend dev: http://localhost:5173/ (when profile dev is enabled)
+
+### Recovery (3-minute rebuild)
+
+```bash
+make restore
+```
+
+Windows PowerShell:
+
+```powershell
+pwsh scripts/restore.ps1 -WithFrontend
 ```
 
 ---
