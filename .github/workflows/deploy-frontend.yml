@@ -33,7 +33,12 @@ jobs:
           npm ci
 
       - name: Generate static frontend data
-        run: python scripts/build_frontend_data.py
+        run: |
+          if [ -f scripts/build_frontend_data.py ]; then
+            python scripts/build_frontend_data.py
+          else
+            echo "build_frontend_data.py not found, skipping."
+          fi
 
       - name: Build
         run: |
